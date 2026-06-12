@@ -7,6 +7,8 @@ from legacy_pilot.contracts.errors import ContractError, ContractViolation
 from legacy_pilot.contracts.models import (
     AlertEvent,
     EvidenceBundle,
+    GraphContext,
+    GraphQuery,
     GraphSnapshot,
     IncidentMatch,
     IncidentQuery,
@@ -67,6 +69,10 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
     @app.post("/v1/repos/index", response_model=GraphSnapshot)
     async def index_repo(request: RepoIndexRequest) -> GraphSnapshot:
         return middleware_router.index_repo(request)
+
+    @app.post("/v1/graph/query", response_model=GraphContext)
+    async def query_graph(query: GraphQuery) -> GraphContext:
+        return middleware_router.query_graph(query)
 
     @app.post("/v1/alerts/submit", response_model=IncidentQuery)
     async def submit_alert(alert: AlertEvent) -> IncidentQuery:

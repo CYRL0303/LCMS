@@ -84,6 +84,7 @@ http://127.0.0.1:8000/health
 
 - `GET /health`
 - `POST /v1/repos/index`
+- `POST /v1/graph/query`
 - `POST /v1/alerts/submit`
 - `POST /v1/evidence-bundles/build`
 - `POST /v1/incidents/similar`

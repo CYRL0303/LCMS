@@ -10,6 +10,8 @@ from legacy_pilot.contracts.models import (
     EvidenceBackedItem,
     EvidenceBundle,
     EvidenceRef,
+    GraphContext,
+    GraphQuery,
     GraphSnapshot,
     IncidentMatch,
     IncidentQuery,
@@ -76,6 +78,83 @@ class MiddlewareRouter:
             edges=[edge],
             evidence_refs=[evidence],
             generated_at=self._now(),
+        )
+
+    def query_graph(self, query: GraphQuery) -> GraphContext:
+        ensure_supported_contract_version(query.contract_version, trace_id=query.trace_id)
+        evidence = self._evidence_ref(
+            evidence_id="EV-GRAPH-001",
+            trace_id=query.trace_id,
+            source_type="code",
+            source_id="DatasetService.java",
+            file_path="src/main/java/DatasetService.java",
+            start_line=40,
+            end_line=45,
+            excerpt="return datasetMapper.selectVersionById(req.getDatasetId());",
+            extraction_method="java_parser",
+            confidence=0.95,
+        )
+        controller = Node(
+            node_id="NODE-DATASET-CONTROLLER-GET-VERSION",
+            graph_id=query.graph_id,
+            repo_id=query.repo_id,
+            type="API Endpoint",
+            name="/api/dataset/version",
+            qualified_name="DatasetController.getVersion",
+            evidence_refs=[evidence],
+        )
+        service = Node(
+            node_id="NODE-DATASET-SERVICE-GET-VERSION",
+            graph_id=query.graph_id,
+            repo_id=query.repo_id,
+            type="Method",
+            name="getVersion",
+            qualified_name="DatasetService.getVersion",
+            evidence_refs=[evidence],
+        )
+        mapper = Node(
+            node_id="NODE-DATASET-MAPPER-SELECT-VERSION",
+            graph_id=query.graph_id,
+            repo_id=query.repo_id,
+            type="Mapper",
+            name="selectVersionById",
+            qualified_name="DatasetMapper.selectVersionById",
+            evidence_refs=[evidence],
+        )
+        controller_to_service = Edge(
+            edge_id="EDGE-CONTROLLER-SERVICE-GET-VERSION",
+            graph_id=query.graph_id,
+            source_node_id=controller.node_id,
+            target_node_id=service.node_id,
+            type="CALLS",
+            confidence=0.9,
+            extraction_method="java_parser",
+            evidence_refs=[evidence],
+        )
+        service_to_mapper = Edge(
+            edge_id="EDGE-SERVICE-MAPPER-SELECT-VERSION",
+            graph_id=query.graph_id,
+            source_node_id=service.node_id,
+            target_node_id=mapper.node_id,
+            type="USES_MAPPER",
+            confidence=0.86,
+            extraction_method="java_parser",
+            evidence_refs=[evidence],
+        )
+        return GraphContext(
+            trace_id=query.trace_id,
+            matched_nodes=[controller, service, mapper],
+            matched_edges=[controller_to_service, service_to_mapper],
+            graph_paths=[
+                [
+                    "DatasetController.getVersion",
+                    "DatasetService.getVersion",
+                    "DatasetMapper.selectVersionById",
+                    "dataset_version",
+                ]
+            ],
+            evidence_refs=[evidence],
+            confidence=0.88,
         )
 
     def submit_alert(self, alert: AlertEvent) -> IncidentQuery:

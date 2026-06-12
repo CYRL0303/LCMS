@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from legacy_pilot.contracts.errors import ContractViolation
-from legacy_pilot.contracts.models import AlertEvent, EvidenceBackedItem, RCAReport
+from legacy_pilot.contracts.models import AlertEvent, EvidenceBackedItem, GraphQuery, RCAReport
 from legacy_pilot.middleware.router import MiddlewareRouter
 
 
@@ -70,6 +70,36 @@ def test_find_similar_incidents_returns_confirmed_mock_match():
     assert matches[0].incident_id == "INC-003"
     assert matches[0].confirmed_by_user is True
     assert matches[0].evidence_refs
+
+
+def test_query_graph_returns_traceable_graph_context():
+    router = MiddlewareRouter()
+    query = GraphQuery(
+        repo_id="repo-demo",
+        graph_id="GRAPH-DEMO",
+        query_terms=["NullPointerException", "DatasetService.getVersion"],
+        node_filters=["Method"],
+        edge_filters=["CALLS"],
+        max_depth=3,
+        trace_id="TRACE-ALERT-001",
+        contract_version="1.0.0",
+    )
+
+    context = router.query_graph(query)
+
+    assert context.trace_id == query.trace_id
+    assert context.matched_nodes
+    assert context.matched_edges
+    assert context.graph_paths == [
+        [
+            "DatasetController.getVersion",
+            "DatasetService.getVersion",
+            "DatasetMapper.selectVersionById",
+            "dataset_version",
+        ]
+    ]
+    assert context.evidence_refs
+    assert context.confidence == 0.88
 
 
 def test_review_rca_rejects_report_without_root_cause_evidence():

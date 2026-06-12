@@ -98,7 +98,18 @@ Owner: Code Knowledge Core
 
 当前是 mock 实现，用固定 Java/Spring Boot demo 节点和边生成 `GraphSnapshot`。
 
-### 4.3 SubmitAlert
+### 4.3 QueryGraph
+
+```text
+POST /v1/graph/query
+Request: GraphQuery
+Response: GraphContext
+Owner: Code Knowledge Core
+```
+
+当前是 mock 实现，用固定 Java/Spring Boot demo 路径返回 `matched_nodes`、`matched_edges`、`graph_paths`、`evidence_refs` 和 `confidence`。
+
+### 4.4 SubmitAlert
 
 ```text
 POST /v1/alerts/submit
@@ -113,7 +124,7 @@ Owner: Incident Context Builder
 - `suspected_location = DatasetService.getVersion`
 - `trace_id = TRACE-{alert_id}`
 
-### 4.4 BuildEvidenceBundle
+### 4.5 BuildEvidenceBundle
 
 ```text
 POST /v1/evidence-bundles/build
@@ -124,7 +135,7 @@ Owner: Incident Context Builder
 
 当前返回 mock code evidence、log evidence、graph path 和 similar incident。
 
-### 4.5 FindSimilarIncidents
+### 4.6 FindSimilarIncidents
 
 ```text
 POST /v1/incidents/similar
@@ -135,7 +146,7 @@ Owner: Incident Memory & Report Store
 
 当前固定返回 `INC-003`，用于证明 incident memory 的契约形态。
 
-### 4.6 GenerateRCA
+### 4.7 GenerateRCA
 
 ```text
 POST /v1/rca/generate
@@ -146,7 +157,7 @@ Owner: RCA Reasoning Engine
 
 当前根据 EvidenceBundle 中的 mock evidence 生成 RCA 草稿。这里仍然是 mock，不调用 LLM。
 
-### 4.7 ReviewRCA
+### 4.8 ReviewRCA
 
 ```text
 POST /v1/rca/review
@@ -170,7 +181,7 @@ Owner: RCA Reasoning Engine
 }
 ```
 
-### 4.8 SaveIncident
+### 4.9 SaveIncident
 
 ```text
 POST /v1/incidents/save
@@ -303,12 +314,11 @@ Response: GraphSnapshot
 HTTP: POST /v1/repos/index
 ```
 
-已建模、后续应接入真实实现的接口：
-
 ```text
 QueryGraph
 Request: GraphQuery
 Response: GraphContext
+HTTP: POST /v1/graph/query
 ```
 
 Code Knowledge Core 必须输出：
@@ -414,6 +424,7 @@ HTTP: POST /v1/incidents/save
 当前 `MiddlewareRouter` 中的实现都是 deterministic mock：
 
 - `index_repo()` 返回固定 GraphSnapshot。
+- `query_graph()` 返回固定 GraphContext，包括 demo 节点、边、调用路径和证据。
 - `submit_alert()` 用简单字符串规则识别 NPE。
 - `build_evidence_bundle()` 返回固定代码证据、日志证据、调用路径和历史 incident。
 - `generate_rca()` 不调用 LLM，只根据 mock evidence 生成固定 RCA。
@@ -453,6 +464,7 @@ python -m pytest -q
 - EvidenceRef confidence 范围。
 - Edge evidence_refs gate。
 - GraphQuery trace_id gate。
+- QueryGraph router 和 HTTP endpoint。
 - unsupported contract_version gate。
 - RCAReport 缺 evidence_refs 时拒绝。
 - mock pipeline trace 连续性。

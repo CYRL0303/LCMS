@@ -73,6 +73,40 @@ def test_http_pipeline_builds_reviews_and_saves_incident():
     assert record["evidence_refs"]
 
 
+def test_query_graph_endpoint_returns_graph_context():
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/v1/graph/query",
+        json={
+            "repo_id": "repo-demo",
+            "graph_id": "GRAPH-DEMO",
+            "query_terms": ["NullPointerException", "DatasetService.getVersion"],
+            "node_filters": ["Method"],
+            "edge_filters": ["CALLS"],
+            "max_depth": 3,
+            "trace_id": "TRACE-ALERT-001",
+            "contract_version": "1.0.0",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trace_id"] == "TRACE-ALERT-001"
+    assert body["matched_nodes"]
+    assert body["matched_edges"]
+    assert body["graph_paths"] == [
+        [
+            "DatasetController.getVersion",
+            "DatasetService.getVersion",
+            "DatasetMapper.selectVersionById",
+            "dataset_version",
+        ]
+    ]
+    assert body["evidence_refs"]
+    assert body["confidence"] == 0.88
+
+
 def test_unsupported_contract_version_returns_contract_error_envelope():
     client = TestClient(create_app())
 
