@@ -214,6 +214,8 @@ Owner: Incident Memory & Report Store
 - major version 不等于 1：拒绝，返回 `UNSUPPORTED_CONTRACT_VERSION`。
 - 1.x.x：接受。
 
+当前跨结构请求对象中，`AlertEvent`、`GraphQuery`、`IncidentQuery`、`EvidenceBundle`、`RCAReport` 和 `SaveIncidentRequest` 都携带 `contract_version`。其中 `EvidenceBundle` 作为 GenerateRCA 的请求，`RCAReport` 作为 ReviewRCA 的请求，都会在 router 边界再次执行版本校验。
+
 ### 5.2 所有运行时对象必须串 trace_id
 
 以下对象必须带 trace_id：
@@ -235,6 +237,8 @@ TRACE-{alert_id}
 ```
 
 后续 EvidenceBundle、RCAReport、ReviewedRCAReport、IncidentRecord 都沿用同一个 trace_id。
+
+如果 HTTP 请求缺少 `trace_id`，中间件返回 `TRACE_REQUIRED`，而不是普通 `VALIDATION_ERROR`。
 
 ### 5.3 confidence 必须在合法范围内
 
@@ -359,6 +363,7 @@ HTTP: POST /v1/evidence-bundles/build
 
 - AlertEvent 必须带 contract_version。
 - IncidentQuery 必须带 trace_id。
+- EvidenceBundle 必须沿用 IncidentQuery.contract_version。
 - EvidenceBundle 必须沿用 IncidentQuery.trace_id。
 - EvidenceBundle 只能组合证据，不应直接输出最终根因。
 - 调用图谱和历史故障时必须通过中间件契约，不直接读其他结构内部对象。
@@ -386,6 +391,7 @@ HTTP: POST /v1/rca/review
 关键约束：
 
 - RCAReport 必须沿用 EvidenceBundle.trace_id。
+- RCAReport 必须沿用 EvidenceBundle.contract_version。
 - hypotheses、selected_root_cause、suggested_fix、migration_impact 都必须能追溯到 evidence_refs。
 - confidence 必须在 0 到 1。
 - Reviewer 阶段要拒绝缺证据的强结论。

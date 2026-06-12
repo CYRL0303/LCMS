@@ -144,6 +144,7 @@ class IncidentMatch(ContractModel):
 class EvidenceBundle(ContractModel):
     trace_id: str
     repo_id: str
+    contract_version: str
     alert_summary: str
     incident_query: IncidentQuery
     matched_nodes: list[Node] = Field(default_factory=list)
@@ -160,6 +161,7 @@ class RCAReport(ContractModel):
     report_id: str
     trace_id: str
     repo_id: str
+    contract_version: str
     hypotheses: list[EvidenceBackedItem] = Field(min_length=1)
     selected_root_cause: EvidenceBackedItem
     evidence_chain: list[EvidenceRef] = Field(min_length=1)

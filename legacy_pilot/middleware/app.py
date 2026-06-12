@@ -46,10 +46,16 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
             for error in exc.errors()
             if error.get("type") == "missing" and error.get("loc")
         ]
+        error_code = ErrorCode.TRACE_REQUIRED if "trace_id" in missing_fields else ErrorCode.VALIDATION_ERROR
+        message = (
+            "trace_id is required for runtime contract objects."
+            if error_code == ErrorCode.TRACE_REQUIRED
+            else "Request body failed contract validation."
+        )
         error = ContractError(
             trace_id=None,
-            error_code=ErrorCode.VALIDATION_ERROR,
-            message="Request body failed contract validation.",
+            error_code=error_code,
+            message=message,
             source_module="interface_contract_middleware",
             recoverable=True,
             missing_fields=missing_fields,

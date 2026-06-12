@@ -71,6 +71,8 @@ def test_http_pipeline_builds_reviews_and_saves_incident():
     assert record["incident_id"] == "INC-ALERT-001"
     assert record["confirmed_by_user"] is True
     assert record["evidence_refs"]
+    assert bundle_response.json()["contract_version"] == "1.0.0"
+    assert report_response.json()["contract_version"] == "1.0.0"
 
 
 def test_query_graph_endpoint_returns_graph_context():
@@ -130,3 +132,27 @@ def test_missing_contract_version_returns_validation_error_envelope():
     body = response.json()
     assert body["error_code"] == "VALIDATION_ERROR"
     assert "contract_version" in body["missing_fields"]
+
+
+def test_missing_trace_id_returns_trace_required_error_envelope():
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/v1/graph/query",
+        json={
+            "repo_id": "repo-demo",
+            "graph_id": "GRAPH-DEMO",
+            "query_terms": ["DatasetService.getVersion"],
+            "node_filters": [],
+            "edge_filters": [],
+            "max_depth": 3,
+            "contract_version": "1.0.0",
+        },
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error_code"] == "TRACE_REQUIRED"
+    assert body["source_module"] == "interface_contract_middleware"
+    assert body["recoverable"] is True
+    assert body["missing_fields"] == ["trace_id"]

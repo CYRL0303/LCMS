@@ -51,9 +51,11 @@ def test_mock_pipeline_produces_evidence_backed_rca_and_incident_record():
     )
 
     assert bundle.trace_id == query.trace_id
+    assert bundle.contract_version == query.contract_version
     assert bundle.code_evidence
     assert bundle.log_evidence
     assert report.trace_id == query.trace_id
+    assert report.contract_version == bundle.contract_version
     assert report.selected_root_cause.evidence_refs
     assert reviewed.final_confidence == report.confidence
     assert record.confirmed_by_user is True
@@ -119,6 +121,30 @@ def test_review_rca_rejects_report_without_root_cause_evidence():
 
     assert excinfo.value.error.error_code == "EVIDENCE_REQUIRED"
     assert excinfo.value.error.recoverable is True
+
+
+def test_generate_rca_rejects_unsupported_bundle_contract_version():
+    router = MiddlewareRouter()
+    bundle = router.build_evidence_bundle(router.submit_alert(alert_event()))
+    unsupported_bundle = bundle.model_copy(update={"contract_version": "2.0.0"})
+
+    with pytest.raises(ContractViolation) as excinfo:
+        router.generate_rca(unsupported_bundle)
+
+    assert excinfo.value.error.error_code == "UNSUPPORTED_CONTRACT_VERSION"
+    assert excinfo.value.error.trace_id == bundle.trace_id
+
+
+def test_review_rca_rejects_unsupported_report_contract_version():
+    router = MiddlewareRouter()
+    report = router.generate_rca(router.build_evidence_bundle(router.submit_alert(alert_event())))
+    unsupported_report = report.model_copy(update={"contract_version": "2.0.0"})
+
+    with pytest.raises(ContractViolation) as excinfo:
+        router.review_rca(unsupported_report)
+
+    assert excinfo.value.error.error_code == "UNSUPPORTED_CONTRACT_VERSION"
+    assert excinfo.value.error.trace_id == report.trace_id
 
 
 def test_save_incident_requires_user_confirmation():

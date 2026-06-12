@@ -12,7 +12,7 @@ from legacy_pilot.contracts.models import (
     GraphQuery,
     RCAReport,
 )
-from legacy_pilot.contracts.validators import ensure_supported_contract_version
+from legacy_pilot.contracts.validators import ensure_supported_contract_version, ensure_trace_id
 
 
 def evidence_ref(evidence_id: str = "EV-001") -> EvidenceRef:
@@ -88,12 +88,23 @@ def test_unsupported_major_contract_version_raises_contract_error():
     assert error.recoverable is False
 
 
+def test_missing_trace_id_raises_trace_required_contract_error():
+    with pytest.raises(ContractViolation) as excinfo:
+        ensure_trace_id("")
+
+    error = excinfo.value.error
+    assert error.error_code == "TRACE_REQUIRED"
+    assert error.missing_fields == ["trace_id"]
+    assert error.recoverable is True
+
+
 def test_rca_report_rejects_root_cause_without_evidence():
     with pytest.raises(ValidationError) as excinfo:
         RCAReport(
             report_id="RCA-001",
             trace_id="TRACE-001",
             repo_id="repo-demo",
+            contract_version="1.0.0",
             hypotheses=[
                 EvidenceBackedItem(
                     summary="datasetId is missing",

@@ -21,7 +21,7 @@ from legacy_pilot.contracts.models import (
     RepoIndexRequest,
     ReviewedRCAReport,
 )
-from legacy_pilot.contracts.validators import ensure_supported_contract_version
+from legacy_pilot.contracts.validators import ensure_supported_contract_version, ensure_trace_id
 
 
 class MiddlewareRouter:
@@ -81,6 +81,7 @@ class MiddlewareRouter:
         )
 
     def query_graph(self, query: GraphQuery) -> GraphContext:
+        ensure_trace_id(query.trace_id)
         ensure_supported_contract_version(query.contract_version, trace_id=query.trace_id)
         evidence = self._evidence_ref(
             evidence_id="EV-GRAPH-001",
@@ -177,6 +178,7 @@ class MiddlewareRouter:
         )
 
     def build_evidence_bundle(self, query: IncidentQuery) -> EvidenceBundle:
+        ensure_trace_id(query.trace_id)
         ensure_supported_contract_version(query.contract_version, trace_id=query.trace_id)
         code_evidence = self._evidence_ref(
             evidence_id="EV-CODE-001",
@@ -211,6 +213,7 @@ class MiddlewareRouter:
         return EvidenceBundle(
             trace_id=query.trace_id,
             repo_id=query.repo_id,
+            contract_version=query.contract_version,
             alert_summary=f"{query.error_type} near {query.suspected_location}",
             incident_query=query,
             matched_nodes=[service_node],
@@ -228,6 +231,8 @@ class MiddlewareRouter:
         )
 
     def generate_rca(self, bundle: EvidenceBundle) -> RCAReport:
+        ensure_trace_id(bundle.trace_id)
+        ensure_supported_contract_version(bundle.contract_version, trace_id=bundle.trace_id)
         primary_evidence = [*bundle.code_evidence, *bundle.log_evidence]
         if not primary_evidence:
             raise self._evidence_required(
@@ -253,6 +258,7 @@ class MiddlewareRouter:
             report_id=f"RCA-{bundle.trace_id.removeprefix('TRACE-')}",
             trace_id=bundle.trace_id,
             repo_id=bundle.repo_id,
+            contract_version=bundle.contract_version,
             hypotheses=[root_cause],
             selected_root_cause=root_cause,
             evidence_chain=primary_evidence,
@@ -269,6 +275,8 @@ class MiddlewareRouter:
         )
 
     def review_rca(self, report: RCAReport) -> ReviewedRCAReport:
+        ensure_trace_id(report.trace_id)
+        ensure_supported_contract_version(report.contract_version, trace_id=report.trace_id)
         if not self._has_evidence(report.selected_root_cause):
             raise self._evidence_required(
                 trace_id=report.trace_id,
@@ -299,6 +307,8 @@ class MiddlewareRouter:
         )
 
     def find_similar_incidents(self, query: IncidentQuery) -> list[IncidentMatch]:
+        ensure_trace_id(query.trace_id)
+        ensure_supported_contract_version(query.contract_version, trace_id=query.trace_id)
         evidence = self._evidence_ref(
             evidence_id="EV-INC-003",
             trace_id=query.trace_id,
@@ -333,6 +343,7 @@ class MiddlewareRouter:
         retention_policy: str,
         contract_version: str,
     ) -> IncidentRecord:
+        ensure_trace_id(reviewed_report.trace_id)
         ensure_supported_contract_version(
             contract_version,
             trace_id=reviewed_report.trace_id,

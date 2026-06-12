@@ -5,6 +5,24 @@ SUPPORTED_CONTRACT_VERSION = "1.0.0"
 SUPPORTED_MAJOR_VERSION = 1
 
 
+def ensure_trace_id(
+    trace_id: str | None,
+    *,
+    source_module: str = "interface_contract_middleware",
+) -> None:
+    if not trace_id:
+        raise ContractViolation(
+            ContractError(
+                trace_id=None,
+                error_code=ErrorCode.TRACE_REQUIRED,
+                message="trace_id is required for runtime contract objects.",
+                source_module=source_module,
+                recoverable=True,
+                missing_fields=["trace_id"],
+            )
+        )
+
+
 def ensure_supported_contract_version(
     contract_version: str | None,
     *,

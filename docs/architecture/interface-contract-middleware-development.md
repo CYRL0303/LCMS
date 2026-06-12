@@ -411,6 +411,7 @@ Edge
 EvidenceBundle
 - trace_id
 - repo_id
+- contract_version
 - alert_summary
 - incident_query
 - matched_nodes[]
@@ -429,6 +430,7 @@ EvidenceBundle
 RCAReport
 - report_id
 - trace_id
+- contract_version
 - root_cause
 - hypotheses[]
 - evidence_chain[]
@@ -533,6 +535,13 @@ EvidenceBundle
 RCAReport
 ReviewedRCAReport
 SaveIncidentRequest
+```
+
+如果运行时请求缺少 trace_id，中间件应返回：
+
+```text
+error_code: TRACE_REQUIRED
+recoverable: true
 ```
 
 ### 5.5 Contract Version Gate
@@ -652,4 +661,3 @@ RCA Reasoning Engine 只能读取 EvidenceBundle，不能直接绕过中间件�
 6. 用户确认后可以保存 IncidentRecord。
 7. 所有对象都能通过 trace_id 串起来。
 ```
-
