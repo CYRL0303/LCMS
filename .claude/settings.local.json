@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_code_knowledge_core_adapter.py -q)",
+      "Bash(python -m pytest -q)",
+      "Bash(python -m pytest tests/test_code_knowledge_core_adapter.py tests/test_router_pipeline.py tests/test_api.py -q)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('tests/test_router_pipeline.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")"
+    ]
+  }
+}

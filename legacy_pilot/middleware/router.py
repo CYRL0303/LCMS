@@ -2,6 +2,11 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from legacy_pilot.code_knowledge_core.adapter import (
+    CodeKnowledgeCoreAdapter,
+    MockCodeKnowledgeCoreAdapter,
+)
+from legacy_pilot.code_knowledge_core.errors import CodeKnowledgeCoreError
 from legacy_pilot.contracts.enums import ErrorCode
 from legacy_pilot.contracts.errors import ContractError, ContractViolation
 from legacy_pilot.contracts.models import (
@@ -25,138 +30,38 @@ from legacy_pilot.contracts.validators import ensure_supported_contract_version,
 
 
 class MiddlewareRouter:
-    def __init__(self, now: Callable[[], datetime] | None = None):
+    def __init__(
+        self,
+        now: Callable[[], datetime] | None = None,
+        *,
+        code_knowledge_core_adapter: CodeKnowledgeCoreAdapter | None = None,
+    ):
         self._now = now or (lambda: datetime.now(UTC))
+        self._code_knowledge_core_adapter = (
+            code_knowledge_core_adapter
+            or MockCodeKnowledgeCoreAdapter(now=self._now)
+        )
 
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
         ensure_supported_contract_version(request.contract_version)
-        trace_id = f"TRACE-INDEX-{request.repo_id}"
-        evidence = self._evidence_ref(
-            evidence_id="EV-REPO-001",
-            trace_id=trace_id,
-            source_type="code",
-            source_id=request.repo_uri,
-            file_path="src/main/java/DatasetService.java",
-            start_line=1,
-            end_line=80,
-            excerpt="class DatasetService { ... }",
-            extraction_method="java_parser",
-            confidence=0.95,
-        )
-        controller = Node(
-            node_id="NODE-DATASET-CONTROLLER",
-            graph_id="GRAPH-DEMO",
-            repo_id=request.repo_id,
-            type="Class",
-            name="DatasetController",
-            qualified_name="com.legacy.DatasetController",
-            evidence_refs=[evidence],
-        )
-        service = Node(
-            node_id="NODE-DATASET-SERVICE",
-            graph_id="GRAPH-DEMO",
-            repo_id=request.repo_id,
-            type="Method",
-            name="getVersion",
-            qualified_name="com.legacy.DatasetService.getVersion",
-            evidence_refs=[evidence],
-        )
-        edge = Edge(
-            edge_id="EDGE-CONTROLLER-SERVICE",
-            graph_id="GRAPH-DEMO",
-            source_node_id=controller.node_id,
-            target_node_id=service.node_id,
-            type="CALLS",
-            confidence=0.92,
-            extraction_method="java_parser",
-            evidence_refs=[evidence],
-        )
-        return GraphSnapshot(
-            graph_id="GRAPH-DEMO",
-            repo_id=request.repo_id,
-            nodes=[controller, service],
-            edges=[edge],
-            evidence_refs=[evidence],
-            generated_at=self._now(),
-        )
+        try:
+            return self._code_knowledge_core_adapter.index_repo(request)
+        except CodeKnowledgeCoreError as exc:
+            raise self._code_knowledge_core_error(
+                trace_id=f"TRACE-INDEX-{request.repo_id}",
+                error=exc,
+            ) from exc
 
     def query_graph(self, query: GraphQuery) -> GraphContext:
         ensure_trace_id(query.trace_id)
         ensure_supported_contract_version(query.contract_version, trace_id=query.trace_id)
-        evidence = self._evidence_ref(
-            evidence_id="EV-GRAPH-001",
-            trace_id=query.trace_id,
-            source_type="code",
-            source_id="DatasetService.java",
-            file_path="src/main/java/DatasetService.java",
-            start_line=40,
-            end_line=45,
-            excerpt="return datasetMapper.selectVersionById(req.getDatasetId());",
-            extraction_method="java_parser",
-            confidence=0.95,
-        )
-        controller = Node(
-            node_id="NODE-DATASET-CONTROLLER-GET-VERSION",
-            graph_id=query.graph_id,
-            repo_id=query.repo_id,
-            type="API Endpoint",
-            name="/api/dataset/version",
-            qualified_name="DatasetController.getVersion",
-            evidence_refs=[evidence],
-        )
-        service = Node(
-            node_id="NODE-DATASET-SERVICE-GET-VERSION",
-            graph_id=query.graph_id,
-            repo_id=query.repo_id,
-            type="Method",
-            name="getVersion",
-            qualified_name="DatasetService.getVersion",
-            evidence_refs=[evidence],
-        )
-        mapper = Node(
-            node_id="NODE-DATASET-MAPPER-SELECT-VERSION",
-            graph_id=query.graph_id,
-            repo_id=query.repo_id,
-            type="Mapper",
-            name="selectVersionById",
-            qualified_name="DatasetMapper.selectVersionById",
-            evidence_refs=[evidence],
-        )
-        controller_to_service = Edge(
-            edge_id="EDGE-CONTROLLER-SERVICE-GET-VERSION",
-            graph_id=query.graph_id,
-            source_node_id=controller.node_id,
-            target_node_id=service.node_id,
-            type="CALLS",
-            confidence=0.9,
-            extraction_method="java_parser",
-            evidence_refs=[evidence],
-        )
-        service_to_mapper = Edge(
-            edge_id="EDGE-SERVICE-MAPPER-SELECT-VERSION",
-            graph_id=query.graph_id,
-            source_node_id=service.node_id,
-            target_node_id=mapper.node_id,
-            type="USES_MAPPER",
-            confidence=0.86,
-            extraction_method="java_parser",
-            evidence_refs=[evidence],
-        )
-        return GraphContext(
-            trace_id=query.trace_id,
-            matched_nodes=[controller, service, mapper],
-            matched_edges=[controller_to_service, service_to_mapper],
-            graph_paths=[
-                [
-                    "DatasetController.getVersion",
-                    "DatasetService.getVersion",
-                    "DatasetMapper.selectVersionById",
-                    "dataset_version",
-                ]
-            ],
-            evidence_refs=[evidence],
-            confidence=0.88,
-        )
+        try:
+            return self._code_knowledge_core_adapter.query_graph(query)
+        except CodeKnowledgeCoreError as exc:
+            raise self._code_knowledge_core_error(
+                trace_id=query.trace_id,
+                error=exc,
+            ) from exc
 
     def submit_alert(self, alert: AlertEvent) -> IncidentQuery:
         ensure_supported_contract_version(alert.contract_version)
@@ -442,6 +347,22 @@ class MiddlewareRouter:
                 message=message,
                 source_module="interface_contract_middleware",
                 recoverable=True,
+            )
+        )
+
+    def _code_knowledge_core_error(
+        self,
+        *,
+        trace_id: str,
+        error: CodeKnowledgeCoreError,
+    ) -> ContractViolation:
+        return ContractViolation(
+            ContractError(
+                trace_id=trace_id,
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=error.message,
+                source_module=error.source_module,
+                recoverable=error.recoverable,
             )
         )
 

@@ -2,9 +2,57 @@ from datetime import UTC, datetime
 
 import pytest
 
+from legacy_pilot.code_knowledge_core.adapter import CodeKnowledgeCoreAdapter
+from legacy_pilot.code_knowledge_core.errors import IndexingError, QueryError
 from legacy_pilot.contracts.errors import ContractViolation
-from legacy_pilot.contracts.models import AlertEvent, EvidenceBackedItem, GraphQuery, RCAReport
+from legacy_pilot.contracts.models import (
+    AlertEvent,
+    EvidenceBackedItem,
+    GraphContext,
+    GraphQuery,
+    GraphSnapshot,
+    RCAReport,
+    RepoIndexRequest,
+)
 from legacy_pilot.middleware.router import MiddlewareRouter
+
+
+class RecordingFakeAdapter(CodeKnowledgeCoreAdapter):
+    """An adapter that records whether index_repo / query_graph were called."""
+
+    def __init__(self):
+        self.index_called = False
+        self.query_called = False
+
+    def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
+        self.index_called = True
+        return GraphSnapshot(
+            graph_id="GRAPH-REC",
+            repo_id=request.repo_id,
+            nodes=[],
+            edges=[],
+            evidence_refs=[],
+            generated_at=datetime(2026, 6, 15, tzinfo=UTC),
+        )
+
+    def query_graph(self, query: GraphQuery) -> GraphContext:
+        self.query_called = True
+        return GraphContext(
+            trace_id=query.trace_id,
+            matched_nodes=[],
+            matched_edges=[],
+            graph_paths=[],
+            evidence_refs=[],
+            confidence=0.0,
+        )
+
+
+class FailingFakeAdapter(CodeKnowledgeCoreAdapter):
+    def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
+        raise IndexingError("repo path is not readable", recoverable=True)
+
+    def query_graph(self, query: GraphQuery) -> GraphContext:
+        raise QueryError("graph backend unavailable", recoverable=True)
 
 
 def alert_event() -> AlertEvent:
@@ -162,3 +210,143 @@ def test_save_incident_requires_user_confirmation():
         )
 
     assert excinfo.value.error.error_code == "USER_CONFIRMATION_REQUIRED"
+
+
+# ---------------------------------------------------------------------------
+# Step 2: default mock preservation + gate-before-adapter
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultRouterPreservesMockBehavior:
+    def test_default_router_index_repo_returns_same_mock_snapshot(self):
+        router = MiddlewareRouter()
+        request = RepoIndexRequest(
+            repo_id="repo-legacy",
+            repo_uri="file:///legacy",
+            language_hint="java",
+            parser_profile="spring-boot",
+            contract_version="1.0.0",
+        )
+
+        snapshot = router.index_repo(request)
+
+        assert snapshot.graph_id == "GRAPH-DEMO"
+        assert snapshot.repo_id == "repo-legacy"
+        assert snapshot.nodes[0].node_id == "NODE-DATASET-CONTROLLER"
+        assert snapshot.nodes[1].node_id == "NODE-DATASET-SERVICE"
+        assert len(snapshot.edges) == 1
+
+    def test_default_router_query_graph_returns_same_mock_context(self):
+        router = MiddlewareRouter()
+        query = GraphQuery(
+            repo_id="repo-legacy",
+            graph_id="GRAPH-DEMO",
+            query_terms=["NullPointerException"],
+            max_depth=3,
+            trace_id="TRACE-ALERT-001",
+            contract_version="1.0.0",
+        )
+
+        context = router.query_graph(query)
+
+        assert context.trace_id == "TRACE-ALERT-001"
+        assert len(context.matched_nodes) == 3
+        assert context.confidence == 0.88
+
+
+class TestGateInterceptsBeforeAdapter:
+    def test_unsupported_contract_version_blocks_index_repo_before_adapter(self):
+        adapter = RecordingFakeAdapter()
+        router = MiddlewareRouter(code_knowledge_core_adapter=adapter)
+        request = RepoIndexRequest(
+            repo_id="r",
+            repo_uri="file:///r",
+            language_hint="java",
+            parser_profile="default",
+            contract_version="2.0.0",
+        )
+
+        with pytest.raises(ContractViolation) as excinfo:
+            router.index_repo(request)
+
+        assert excinfo.value.error.error_code == "UNSUPPORTED_CONTRACT_VERSION"
+        assert adapter.index_called is False
+
+    def test_missing_trace_id_blocks_query_graph_before_adapter(self):
+        adapter = RecordingFakeAdapter()
+        router = MiddlewareRouter(code_knowledge_core_adapter=adapter)
+        query = GraphQuery(
+            repo_id="r",
+            graph_id="GRAPH-REC",
+            query_terms=["x"],
+            max_depth=2,
+            trace_id="",
+            contract_version="1.0.0",
+        )
+
+        with pytest.raises(ContractViolation) as excinfo:
+            router.query_graph(query)
+
+        assert excinfo.value.error.error_code == "TRACE_REQUIRED"
+        assert adapter.query_called is False
+
+    def test_unsupported_contract_version_blocks_query_graph_before_adapter(self):
+        adapter = RecordingFakeAdapter()
+        router = MiddlewareRouter(code_knowledge_core_adapter=adapter)
+        query = GraphQuery(
+            repo_id="r",
+            graph_id="GRAPH-REC",
+            query_terms=["x"],
+            max_depth=2,
+            trace_id="TRACE-T",
+            contract_version="2.0.0",
+        )
+
+        with pytest.raises(ContractViolation) as excinfo:
+            router.query_graph(query)
+
+        assert excinfo.value.error.error_code == "UNSUPPORTED_CONTRACT_VERSION"
+        assert adapter.query_called is False
+
+
+class TestCodeKnowledgeCoreErrorConversion:
+    def test_indexing_error_becomes_contract_violation(self):
+        router = MiddlewareRouter(code_knowledge_core_adapter=FailingFakeAdapter())
+        request = RepoIndexRequest(
+            repo_id="repo-fail",
+            repo_uri="file:///missing",
+            language_hint="java",
+            parser_profile="default",
+            contract_version="1.0.0",
+        )
+
+        with pytest.raises(ContractViolation) as excinfo:
+            router.index_repo(request)
+
+        error = excinfo.value.error
+        assert error.error_code == "VALIDATION_ERROR"
+        assert error.trace_id == "TRACE-INDEX-repo-fail"
+        assert error.message == "repo path is not readable"
+        assert error.source_module == "code_knowledge_core"
+        assert error.recoverable is True
+
+    def test_query_error_becomes_contract_violation(self):
+        router = MiddlewareRouter(code_knowledge_core_adapter=FailingFakeAdapter())
+        query = GraphQuery(
+            repo_id="repo-fail",
+            graph_id="GRAPH-FAIL",
+            query_terms=["DatasetService.getVersion"],
+            max_depth=2,
+            trace_id="TRACE-Q-FAIL",
+            contract_version="1.0.0",
+        )
+
+        with pytest.raises(ContractViolation) as excinfo:
+            router.query_graph(query)
+
+        error = excinfo.value.error
+        assert error.error_code == "VALIDATION_ERROR"
+        assert error.trace_id == "TRACE-Q-FAIL"
+        assert error.message == "graph backend unavailable"
+        assert error.source_module == "code_knowledge_core"
+        assert error.recoverable is True
