@@ -2,14 +2,16 @@ import json
 import os
 import subprocess
 from collections.abc import Callable
+from hashlib import sha256
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from legacy_pilot.code_knowledge_core.errors import IndexingError, QueryError
 from legacy_pilot.contracts.models import GraphQuery, RepoIndexRequest
 
 
 DEFAULT_GITNEXUS_BIN = "gitnexus"
-DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_GRAPH_NODES = 5000
 DEFAULT_MAX_GRAPH_EDGES = 10000
 
@@ -52,57 +54,88 @@ class GitNexusCliClient:
         self.last_diagnostics: dict[str, str] = {}
 
     def index_repo(self, request: RepoIndexRequest) -> dict[str, Any]:
-        command = [
+        analyze_command = [
             self.gitnexus_bin,
-            "index",
-            "--repo-id",
-            request.repo_id,
-            "--repo-path",
+            "analyze",
             _repo_path(request.repo_uri),
-            "--language",
-            request.language_hint,
-            "--parser-profile",
-            request.parser_profile,
-            "--max-nodes",
-            str(self.max_graph_nodes),
-            "--max-edges",
-            str(self.max_graph_edges),
+            "--skip-git",
+            "--index-only",
+            "--name",
+            request.repo_id,
         ]
-        raw_payload = self._run_json(command, operation="index")
-        return self._normalize_index_payload(raw_payload, request=request)
+        self._run_text(analyze_command, operation="index")
+        raw_payload = self._run_json(
+            [
+                self.gitnexus_bin,
+                "cypher",
+                (
+                    "MATCH (n)-[r]->(m) "
+                    "RETURN n.id, r.type, r.confidence, r.reason, m.id "
+                    f"LIMIT {self.max_graph_edges}"
+                ),
+                "-r",
+                request.repo_id,
+            ],
+            operation="index",
+        )
+        return self._normalize_cypher_graph_payload(raw_payload, request=request)
 
     def query_graph(self, query: GraphQuery) -> dict[str, Any]:
-        command = [
-            self.gitnexus_bin,
-            "query",
-            "--repo-id",
-            query.repo_id,
-            "--graph-id",
-            query.graph_id,
-            "--max-depth",
-            str(query.max_depth),
-            "--max-nodes",
-            str(self.max_graph_nodes),
-            "--max-edges",
-            str(self.max_graph_edges),
-        ]
-        for term in query.query_terms:
-            command.extend(["--query-term", term])
-        for node_filter in query.node_filters:
-            command.extend(["--node-filter", node_filter])
-        for edge_filter in query.edge_filters:
-            command.extend(["--edge-filter", edge_filter])
+        uid = self._resolve_route_controller_uid(query)
+        if uid is None:
+            uid = self._resolve_symbol_uid(query)
+        if uid is None:
+            return _not_found_query_payload(query.graph_id)
 
-        raw_payload = self._run_json(command, operation="query")
-        return self._normalize_query_payload(raw_payload)
+        raw_context = self._run_json(
+            [
+                self.gitnexus_bin,
+                "context",
+                "--uid",
+                uid,
+                "-r",
+                query.repo_id,
+                "--content",
+            ],
+            operation="query",
+        )
+        return self._normalize_context_query_payload(raw_context, query=query)
+
+    def _run_text(self, command: list[str], *, operation: str) -> str:
+        return self._run_completed(command, operation=operation).stdout or ""
 
     def _run_json(self, command: list[str], *, operation: str) -> dict[str, Any]:
+        result = self._run_completed(command, operation=operation)
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise self._error(
+                operation,
+                f"GitNexus CLI returned invalid JSON while {_operation_phrase(operation)}.",
+                diagnostics=self.last_diagnostics,
+            ) from exc
+        if not isinstance(payload, dict):
+            raise self._error(
+                operation,
+                f"GitNexus CLI returned invalid JSON while {_operation_phrase(operation)}.",
+                diagnostics=self.last_diagnostics,
+            )
+        return payload
+
+    def _run_completed(
+        self,
+        command: list[str],
+        *,
+        operation: str,
+    ) -> subprocess.CompletedProcess[str]:
         try:
             result = self._runner(
                 command,
                 cwd=self.repo_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout_seconds,
                 check=False,
             )
@@ -135,22 +168,7 @@ class GitNexusCliClient:
                 f"GitNexus CLI failed while {_operation_phrase(operation)}.",
                 diagnostics=self.last_diagnostics,
             )
-
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            raise self._error(
-                operation,
-                f"GitNexus CLI returned invalid JSON while {_operation_phrase(operation)}.",
-                diagnostics=self.last_diagnostics,
-            ) from exc
-        if not isinstance(payload, dict):
-            raise self._error(
-                operation,
-                f"GitNexus CLI returned invalid JSON while {_operation_phrase(operation)}.",
-                diagnostics=self.last_diagnostics,
-            )
-        return payload
+        return result
 
     def _normalize_index_payload(
         self,
@@ -215,6 +233,152 @@ class GitNexusCliClient:
             "not_found": not_found,
         }
 
+    def _normalize_cypher_graph_payload(
+        self,
+        raw_payload: dict[str, Any],
+        *,
+        request: RepoIndexRequest,
+    ) -> dict[str, Any]:
+        markdown = _string_value(raw_payload.get("markdown")) or ""
+        rows = _markdown_table_rows(markdown)
+        nodes_by_id: dict[str, dict[str, Any]] = {}
+        relationships: list[dict[str, Any]] = []
+
+        for row in rows:
+            source_id = _string_value(row.get("n.id"))
+            target_id = _string_value(row.get("m.id"))
+            relationship_type = _string_value(row.get("r.type")) or "RELATED_TO"
+            if not source_id or not target_id:
+                continue
+            nodes_by_id.setdefault(source_id, _node_payload_from_gitnexus_id(source_id))
+            nodes_by_id.setdefault(target_id, _node_payload_from_gitnexus_id(target_id))
+            relationships.append(
+                {
+                    "id": _relationship_id(source_id, relationship_type, target_id),
+                    "type": relationship_type,
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "confidence": _float_value(row.get("r.confidence"), default=0.5),
+                    "reason": _string_value(row.get("r.reason")),
+                    "evidence_signals": [_string_value(row.get("r.reason")) or "cypher"],
+                }
+            )
+
+        return {
+            "repo_id": request.repo_id,
+            "graph_id": f"GRAPH-{request.repo_id}",
+            "trace_id": f"TRACE-INDEX-{request.repo_id}",
+            "nodes": list(nodes_by_id.values())[: self.max_graph_nodes],
+            "relationships": relationships[: self.max_graph_edges],
+        }
+
+    def _resolve_symbol_uid(self, query: GraphQuery, term: str | None = None) -> str | None:
+        term = term or _first_symbol_query_term(query.query_terms)
+        if term is None:
+            return None
+        raw_payload = self._run_json(
+            [
+                self.gitnexus_bin,
+                "cypher",
+                (
+                    "MATCH (n) "
+                    f"WHERE n.id CONTAINS {_cypher_string(term)} "
+                    "RETURN n.id, n.name, n.filePath, n.startLine, n.endLine "
+                    "LIMIT 10"
+                ),
+                "-r",
+                query.repo_id,
+            ],
+            operation="query",
+        )
+        rows = _markdown_table_rows(_string_value(raw_payload.get("markdown")) or "")
+        for row in rows:
+            uid = _string_value(row.get("n.id"))
+            if uid and term in uid:
+                return uid
+        return _string_value(rows[0].get("n.id")) if rows else None
+
+    def _resolve_route_controller_uid(self, query: GraphQuery) -> str | None:
+        route = _first_route_query_term(query.query_terms)
+        if route is None:
+            return None
+        raw_payload = self._run_json(
+            [
+                self.gitnexus_bin,
+                "cypher",
+                (
+                    "MATCH (n) "
+                    f"WHERE n.content CONTAINS {_cypher_string(route)} "
+                    "RETURN n.id, n.name, n.filePath "
+                    "LIMIT 5"
+                ),
+                "-r",
+                query.repo_id,
+            ],
+            operation="query",
+        )
+        rows = _markdown_table_rows(_string_value(raw_payload.get("markdown")) or "")
+        for row in rows:
+            file_path = _string_value(row.get("n.filePath")) or _string_value(row.get("n.id")) or ""
+            class_name = _class_name_from_java_file(file_path)
+            method_name = _method_name_from_route(route)
+            if class_name and method_name:
+                uid = self._resolve_symbol_uid(query, f"{class_name}.{method_name}")
+                if uid:
+                    return uid
+        return None
+
+    def _normalize_context_query_payload(
+        self,
+        raw_context: dict[str, Any],
+        *,
+        query: GraphQuery,
+    ) -> dict[str, Any]:
+        if raw_context.get("status") not in {None, "found"}:
+            return _not_found_query_payload(query.graph_id)
+        symbol = raw_context.get("symbol")
+        if not isinstance(symbol, dict):
+            return _not_found_query_payload(query.graph_id)
+
+        center = _node_payload_from_context_item(symbol)
+        center_id = center["id"]
+        nodes_by_id = {center_id: center}
+        relationships: list[dict[str, Any]] = []
+        incoming_ids: list[str] = []
+        outgoing_ids: list[str] = []
+
+        for caller in _context_calls(raw_context, "incoming"):
+            caller_node = _node_payload_from_context_item(caller)
+            caller_id = caller_node["id"]
+            nodes_by_id.setdefault(caller_id, caller_node)
+            incoming_ids.append(caller_id)
+            relationships.append(_relationship_payload(caller_id, "CALLS", center_id, "context-incoming"))
+
+        for callee in _context_calls(raw_context, "outgoing"):
+            callee_node = _node_payload_from_context_item(callee)
+            callee_id = callee_node["id"]
+            nodes_by_id.setdefault(callee_id, callee_node)
+            outgoing_ids.append(callee_id)
+            relationships.append(_relationship_payload(center_id, "CALLS", callee_id, "context-outgoing"))
+
+        paths: list[list[str]] = []
+        if incoming_ids and outgoing_ids:
+            paths.append([incoming_ids[0], center_id, outgoing_ids[0]])
+        elif incoming_ids:
+            paths.append([incoming_ids[0], center_id])
+        elif outgoing_ids:
+            paths.append([center_id, outgoing_ids[0]])
+        elif center_id:
+            paths.append([center_id])
+
+        return {
+            "graph_id": query.graph_id,
+            "nodes": list(nodes_by_id.values())[: self.max_graph_nodes],
+            "relationships": relationships[: self.max_graph_edges],
+            "paths": paths,
+            "not_found": False,
+        }
+
     def _error(
         self,
         operation: str,
@@ -253,7 +417,11 @@ def _int_config(value: int | None, env_key: str, default: int) -> int:
 
 def _repo_path(repo_uri: str) -> str:
     if repo_uri.startswith("file://"):
-        return repo_uri.removeprefix("file://")
+        parsed = urlparse(repo_uri)
+        path = unquote(parsed.path)
+        if os.name == "nt" and len(path) >= 3 and path[0] == "/" and path[2] == ":":
+            return path[1:]
+        return path
     return repo_uri
 
 
@@ -338,3 +506,167 @@ def _not_found(payload: dict[str, Any]) -> bool:
     if status is None:
         return False
     return status.lower() in {"not_found", "not-found", "not found"}
+
+
+def _markdown_table_rows(markdown: str) -> list[dict[str, str]]:
+    lines = [line.strip() for line in markdown.splitlines() if line.strip().startswith("|")]
+    if len(lines) < 3:
+        return []
+    headers = _markdown_table_cells(lines[0])
+    rows: list[dict[str, str]] = []
+    for line in lines[2:]:
+        cells = _markdown_table_cells(line)
+        if len(cells) != len(headers):
+            continue
+        rows.append(dict(zip(headers, cells, strict=True)))
+    return rows
+
+
+def _markdown_table_cells(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _node_payload_from_gitnexus_id(node_id: str) -> dict[str, Any]:
+    node_type, _, body = node_id.partition(":")
+    name = body or node_id
+    file_path = None
+    qualified_name = None
+    if node_type in {"Class", "Interface", "Method"} and ":" in body:
+        file_path, symbol = body.rsplit(":", 1)
+        qualified_name = symbol.removesuffix("#1")
+        name = qualified_name.split(".")[-1]
+    elif node_type == "File":
+        file_path = body
+        name = os.path.basename(body)
+    elif node_type == "Folder":
+        file_path = body
+        name = os.path.basename(body)
+
+    properties: dict[str, Any] = {}
+    if file_path:
+        properties["filePath"] = file_path
+    if qualified_name:
+        properties["qualifiedName"] = qualified_name
+
+    return {
+        "id": node_id,
+        "type": node_type or "Unknown",
+        "name": name,
+        "properties": properties,
+    }
+
+
+def _node_payload_from_context_item(item: dict[str, Any]) -> dict[str, Any]:
+    uid = _string_value(_get_any(item, "uid", "id")) or ""
+    payload = _node_payload_from_gitnexus_id(uid)
+    name = _string_value(item.get("name"))
+    kind = _string_value(item.get("kind"))
+    file_path = _string_value(item.get("filePath"))
+    start_line = _int_value(item.get("startLine"))
+    end_line = _int_value(item.get("endLine"))
+
+    if name:
+        payload["name"] = name
+    if kind:
+        payload["type"] = kind
+    if file_path:
+        payload["properties"]["filePath"] = file_path
+    if start_line is not None:
+        payload["properties"]["startLine"] = start_line
+    if end_line is not None:
+        payload["properties"]["endLine"] = end_line
+    if content := _string_value(item.get("content")):
+        payload["properties"]["excerpt"] = content
+    return payload
+
+
+def _relationship_payload(
+    source_id: str,
+    relationship_type: str,
+    target_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "id": _relationship_id(source_id, relationship_type, target_id),
+        "type": relationship_type,
+        "source_id": source_id,
+        "target_id": target_id,
+        "confidence": 0.85,
+        "reason": reason,
+        "evidence_signals": [reason],
+    }
+
+
+def _relationship_id(source_id: str, relationship_type: str, target_id: str) -> str:
+    identity = "|".join([source_id, relationship_type, target_id])
+    return f"GN-REL-{sha256(identity.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _float_value(value: Any, *, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _int_value(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_symbol_query_term(query_terms: list[str]) -> str | None:
+    for term in query_terms:
+        if term and not term.startswith("/"):
+            return term
+    return None
+
+
+def _first_route_query_term(query_terms: list[str]) -> str | None:
+    for term in query_terms:
+        if term and term.startswith("/"):
+            return term
+    return None
+
+
+def _class_name_from_java_file(file_path: str) -> str | None:
+    file_name = os.path.basename(file_path)
+    if not file_name.endswith(".java"):
+        return None
+    class_name = file_name.removesuffix(".java")
+    return class_name if class_name.endswith("Controller") else None
+
+
+def _method_name_from_route(route: str) -> str | None:
+    leaf = route.rstrip("/").rsplit("/", 1)[-1]
+    if not leaf:
+        return None
+    parts = [part for part in leaf.replace("-", "_").split("_") if part]
+    if not parts:
+        return None
+    return "get" + "".join(part[:1].upper() + part[1:] for part in parts)
+
+
+def _context_calls(raw_context: dict[str, Any], direction: str) -> list[dict[str, Any]]:
+    value = raw_context.get(direction)
+    if not isinstance(value, dict):
+        return []
+    calls = value.get("calls")
+    if not isinstance(calls, list):
+        return []
+    return [item for item in calls if isinstance(item, dict)]
+
+
+def _not_found_query_payload(graph_id: str | None) -> dict[str, Any]:
+    return {
+        "graph_id": graph_id,
+        "nodes": [],
+        "relationships": [],
+        "paths": [],
+        "not_found": True,
+    }
+
+
+def _cypher_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"

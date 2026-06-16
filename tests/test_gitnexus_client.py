@@ -9,13 +9,14 @@ from legacy_pilot.contracts.models import GraphQuery, RepoIndexRequest
 
 
 class RecordingRunner:
-    def __init__(self, result=None, side_effect=None):
+    def __init__(self, result=None, side_effect=None, results=None):
         self.result = result or subprocess.CompletedProcess(
             args=[],
             returncode=0,
             stdout="{}",
             stderr="",
         )
+        self.results = list(results or [])
         self.side_effect = side_effect
         self.calls = []
 
@@ -23,6 +24,8 @@ class RecordingRunner:
         self.calls.append((args, kwargs))
         if self.side_effect:
             raise self.side_effect
+        if self.results:
+            return self.results.pop(0)
         return self.result
 
 
@@ -62,7 +65,20 @@ def completed_process(payload, *, stderr="debug details"):
     )
 
 
-def test_index_command_includes_repo_path_repo_id_and_operation(monkeypatch):
+def text_process(stdout="", *, stderr="debug details", returncode=0):
+    return subprocess.CompletedProcess(
+        args=["gitnexus"],
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def cypher_process(markdown, *, stderr="debug details"):
+    return completed_process({"markdown": markdown}, stderr=stderr)
+
+
+def test_index_command_uses_real_gitnexus_analyze_shape(monkeypatch):
     monkeypatch.setenv("GITNEXUS_BIN", "env-gitnexus")
     monkeypatch.setenv("GITNEXUS_REPO_ROOT", "/gitnexus/runtime")
     monkeypatch.setenv("GITNEXUS_TIMEOUT_SECONDS", "9")
@@ -81,17 +97,94 @@ def test_index_command_includes_repo_path_repo_id_and_operation(monkeypatch):
 
     args, kwargs = runner.calls[0]
     command = args[0]
-    assert command[:2] == ["env-gitnexus", "index"]
-    assert "--repo-id" in command
-    assert "repo-demo" in command
-    assert "--repo-path" in command
+    assert command[:2] == ["env-gitnexus", "analyze"]
     assert "/workspace/legacy-demo" in command
+    assert "--skip-git" in command
+    assert "--index-only" in command
+    assert "--name" in command
+    assert "repo-demo" in command
     assert kwargs["cwd"] == "/gitnexus/runtime"
     assert kwargs["timeout"] == 9.0
 
 
-def test_query_command_includes_requested_operation_and_query_inputs():
-    runner = RecordingRunner(completed_process({"nodes": [], "relationships": []}))
+def test_index_repo_runs_analyze_then_cypher_and_normalizes_graph():
+    runner = RecordingRunner(
+        results=[
+            text_process("Repository indexed successfully\n"),
+            cypher_process(
+                "| n.id | r.type | r.confidence | r.reason | m.id |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| Method:src/main/java/com/legacy/DatasetController.java:DatasetController.getVersion#1 | CALLS | 0.85 | import-resolved | Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1 |\n"
+            ),
+        ]
+    )
+    client = GitNexusCliClient(gitnexus_bin="custom-gitnexus", runner=runner)
+
+    payload = client.index_repo(repo_index_request())
+
+    assert len(runner.calls) == 2
+    assert runner.calls[0][0][0][:2] == ["custom-gitnexus", "analyze"]
+    assert runner.calls[1][0][0][:2] == ["custom-gitnexus", "cypher"]
+    assert payload["repo_id"] == "repo-demo"
+    assert payload["graph_id"] == "GRAPH-repo-demo"
+    assert payload["nodes"][0]["id"].startswith("Method:")
+    assert payload["relationships"][0]["type"] == "CALLS"
+    assert payload["relationships"][0]["source_id"].endswith("DatasetController.getVersion#1")
+    assert payload["relationships"][0]["target_id"].endswith("DatasetService.getVersion#1")
+    assert payload["relationships"][0]["confidence"] == 0.85
+
+
+def test_query_graph_uses_cypher_uid_lookup_then_context_for_method_query():
+    runner = RecordingRunner(
+        results=[
+            cypher_process(
+                "| n.id | n.name | n.filePath | n.startLine | n.endLine |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1 | getVersion | src/main/java/com/legacy/DatasetService.java | 12 | 17 |\n"
+            ),
+            completed_process(
+                {
+                    "status": "found",
+                    "symbol": {
+                        "uid": "Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1",
+                        "name": "getVersion",
+                        "kind": "Method",
+                        "filePath": "src/main/java/com/legacy/DatasetService.java",
+                        "startLine": 12,
+                        "endLine": 17,
+                    },
+                    "incoming": {
+                        "calls": [
+                            {
+                                "uid": "Method:src/main/java/com/legacy/DatasetController.java:DatasetController.getVersion#1",
+                                "name": "getVersion",
+                                "kind": "Method",
+                                "filePath": "src/main/java/com/legacy/DatasetController.java",
+                                "startLine": 14,
+                            }
+                        ]
+                    },
+                    "outgoing": {
+                        "calls": [
+                            {
+                                "uid": "Method:src/main/java/com/legacy/DatasetMapper.java:DatasetMapper.selectVersionById#1",
+                                "name": "selectVersionById",
+                                "kind": "Method",
+                                "filePath": "src/main/java/com/legacy/DatasetMapper.java",
+                                "startLine": 3,
+                            }
+                        ]
+                    },
+                    "processes": [
+                        {
+                            "id": "proc_0_getversion",
+                            "name": "GetVersion \u2192 SelectVersionById",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
     client = GitNexusCliClient(
         gitnexus_bin="custom-gitnexus",
         timeout_seconds=5,
@@ -100,22 +193,79 @@ def test_query_command_includes_requested_operation_and_query_inputs():
         runner=runner,
     )
 
-    client.query_graph(graph_query())
+    payload = client.query_graph(graph_query(query_terms=["DatasetService.getVersion"]))
 
-    command = runner.calls[0][0][0]
-    assert command[:2] == ["custom-gitnexus", "query"]
-    assert "--repo-id" in command
-    assert "repo-demo" in command
-    assert "--graph-id" in command
-    assert "GRAPH-GN" in command
-    assert "--query-term" in command
-    assert "DatasetService.getVersion" in command
-    assert "--max-depth" in command
-    assert "3" in command
-    assert "--max-nodes" in command
-    assert "11" in command
-    assert "--max-edges" in command
-    assert "22" in command
+    lookup_command = runner.calls[0][0][0]
+    context_command = runner.calls[1][0][0]
+    assert lookup_command[:2] == ["custom-gitnexus", "cypher"]
+    assert "DatasetService.getVersion" in lookup_command[2]
+    assert context_command[:2] == ["custom-gitnexus", "context"]
+    assert "--uid" in context_command
+    assert "Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1" in context_command
+    assert payload["graph_id"] == "GRAPH-GN"
+    assert payload["nodes"][0]["id"].endswith("DatasetService.getVersion#1")
+    assert payload["relationships"][0]["type"] == "CALLS"
+    assert payload["paths"] == [
+        [
+            "Method:src/main/java/com/legacy/DatasetController.java:DatasetController.getVersion#1",
+            "Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1",
+            "Method:src/main/java/com/legacy/DatasetMapper.java:DatasetMapper.selectVersionById#1",
+        ]
+    ]
+
+
+def test_query_graph_route_term_falls_back_to_controller_method_context():
+    runner = RecordingRunner(
+        results=[
+            cypher_process(
+                "| n.id | n.name | n.filePath |\n"
+                "| --- | --- | --- |\n"
+                "| File:src/main/java/com/legacy/DatasetController.java | DatasetController.java | src/main/java/com/legacy/DatasetController.java |\n"
+            ),
+            cypher_process(
+                "| n.id | n.name | n.filePath | n.startLine | n.endLine |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| Method:src/main/java/com/legacy/DatasetController.java:DatasetController.getVersion#1 | getVersion | src/main/java/com/legacy/DatasetController.java | 14 | 16 |\n"
+            ),
+            completed_process(
+                {
+                    "status": "found",
+                    "symbol": {
+                        "uid": "Method:src/main/java/com/legacy/DatasetController.java:DatasetController.getVersion#1",
+                        "name": "getVersion",
+                        "kind": "Method",
+                        "filePath": "src/main/java/com/legacy/DatasetController.java",
+                        "startLine": 14,
+                    },
+                    "incoming": {"calls": []},
+                    "outgoing": {
+                        "calls": [
+                            {
+                                "uid": "Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1",
+                                "name": "getVersion",
+                                "kind": "Method",
+                                "filePath": "src/main/java/com/legacy/DatasetService.java",
+                                "startLine": 12,
+                            }
+                        ]
+                    },
+                }
+            ),
+        ]
+    )
+    client = GitNexusCliClient(gitnexus_bin="custom-gitnexus", runner=runner)
+
+    payload = client.query_graph(graph_query(query_terms=["/api/dataset/version"]))
+
+    route_lookup = runner.calls[0][0][0]
+    method_lookup = runner.calls[1][0][0]
+    context_command = runner.calls[2][0][0]
+    assert route_lookup[:2] == ["custom-gitnexus", "cypher"]
+    assert "/api/dataset/version" in route_lookup[2]
+    assert "DatasetController.getVersion" in method_lookup[2]
+    assert context_command[:2] == ["custom-gitnexus", "context"]
+    assert payload["nodes"][0]["id"].endswith("DatasetController.getVersion#1")
+    assert payload["relationships"][0]["target_id"].endswith("DatasetService.getVersion#1")
 
 
 @pytest.mark.parametrize(
@@ -187,50 +337,42 @@ def test_invalid_json_stdout_becomes_recoverable_error():
     assert excinfo.value.diagnostics["stderr"] == "parser diagnostic"
 
 
-def test_valid_index_json_is_normalized_into_mapper_ready_payload():
-    raw_payload = {
-        "graphId": "GRAPH-GN",
-        "metadata": {"repoId": "repo-from-gitnexus"},
-        "graph": {
-            "vertices": [{"id": "N1", "labels": ["Method"]}],
-            "edges": [{"id": "R1", "source": "N1", "target": "N1"}],
-        },
-    }
-    runner = RecordingRunner(completed_process(raw_payload, stderr="index diagnostic"))
+def test_valid_cypher_markdown_is_normalized_into_mapper_ready_index_payload():
+    runner = RecordingRunner(
+        results=[
+            text_process("Repository indexed successfully\n"),
+            cypher_process(
+                "| n.id | r.type | r.confidence | r.reason | m.id |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1 | CALLS | 0.85 | import-resolved | Method:src/main/java/com/legacy/DatasetMapper.java:DatasetMapper.selectVersionById#1 |\n",
+                stderr="index diagnostic",
+            ),
+        ]
+    )
     client = GitNexusCliClient(runner=runner)
 
     payload = client.index_repo(repo_index_request(repo_id="repo-request"))
 
-    assert payload == {
-        "repo_id": "repo-from-gitnexus",
-        "graph_id": "GRAPH-GN",
-        "trace_id": "TRACE-INDEX-repo-request",
-        "nodes": [{"id": "N1", "labels": ["Method"]}],
-        "relationships": [{"id": "R1", "source": "N1", "target": "N1"}],
-    }
+    assert payload["repo_id"] == "repo-request"
+    assert payload["graph_id"] == "GRAPH-repo-request"
+    assert payload["trace_id"] == "TRACE-INDEX-repo-request"
+    assert payload["nodes"][0]["id"].endswith("DatasetService.getVersion#1")
+    assert payload["relationships"][0]["type"] == "CALLS"
     assert client.last_diagnostics["stderr"] == "index diagnostic"
 
 
-def test_valid_query_json_is_normalized_into_mapper_ready_payload():
-    raw_payload = {
-        "graphId": "GRAPH-GN",
-        "subgraph": {
-            "nodes": [{"id": "N1", "type": "Method"}],
-            "relationships": [{"id": "R1", "source_id": "N1", "target_id": "N1"}],
-        },
-        "paths": [{"nodes": ["N1"]}],
-    }
-    runner = RecordingRunner(completed_process(raw_payload))
+def test_query_graph_returns_not_found_when_symbol_lookup_is_empty():
+    runner = RecordingRunner(cypher_process("| n.id |\n| --- |\n"))
     client = GitNexusCliClient(runner=runner)
 
     payload = client.query_graph(graph_query())
 
     assert payload == {
         "graph_id": "GRAPH-GN",
-        "nodes": [{"id": "N1", "type": "Method"}],
-        "relationships": [{"id": "R1", "source_id": "N1", "target_id": "N1"}],
-        "paths": [{"nodes": ["N1"]}],
-        "not_found": False,
+        "nodes": [],
+        "relationships": [],
+        "paths": [],
+        "not_found": True,
     }
 
 
@@ -239,7 +381,12 @@ def test_constructor_configuration_overrides_environment(monkeypatch):
     monkeypatch.setenv("GITNEXUS_TIMEOUT_SECONDS", "99")
     monkeypatch.setenv("LEGACY_PILOT_MAX_GRAPH_NODES", "99")
     monkeypatch.setenv("LEGACY_PILOT_MAX_GRAPH_EDGES", "99")
-    runner = RecordingRunner(completed_process({"nodes": [], "relationships": []}))
+    runner = RecordingRunner(
+        results=[
+            text_process("Repository indexed successfully\n"),
+            cypher_process("| n.id | r.type | r.confidence | r.reason | m.id |\n| --- | --- | --- | --- | --- |\n"),
+        ]
+    )
     client = GitNexusCliClient(
         gitnexus_bin="param-gitnexus",
         timeout_seconds=3,
@@ -248,10 +395,13 @@ def test_constructor_configuration_overrides_environment(monkeypatch):
         runner=runner,
     )
 
-    client.query_graph(graph_query())
+    client.index_repo(repo_index_request())
 
-    command = runner.calls[0][0][0]
-    assert command[0] == "param-gitnexus"
+    analyze_command = runner.calls[0][0][0]
+    cypher_command = runner.calls[1][0][0]
+    assert analyze_command[0] == "param-gitnexus"
+    assert cypher_command[0] == "param-gitnexus"
     assert runner.calls[0][1]["timeout"] == 3.0
-    assert "7" in command
-    assert "8" in command
+    assert runner.calls[0][1]["encoding"] == "utf-8"
+    assert runner.calls[0][1]["errors"] == "replace"
+    assert "LIMIT 8" in cypher_command[2]

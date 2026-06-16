@@ -109,7 +109,10 @@ adapter.py
   中间件只依赖该接口，不依赖 GitNexus 具体调用方式。
 
 gitnexus_client.py
-  调用 GitNexus CLI、HTTP server 或后续 TS bridge。
+  当前只调用 GitNexus CLI。
+  IndexRepo 使用 analyze 构建索引，再用 cypher 抽取图节点和边。
+  QueryGraph 使用 cypher 解析符号或 route，再用 context 读取调用上下文。
+  HTTP server / TS bridge 是后续扩展，不属于首版已实现 backend。
   负责命令执行、超时、进程错误、JSON 解析和 GitNexus 运行状态检查。
 
 gitnexus_mapper.py
@@ -537,13 +540,13 @@ Python adapter 使用 `subprocess.run()` 调用 GitNexus CLI 或本地 checkout 
 建议环境变量：
 
 ```text
-LEGACY_PILOT_CODE_CORE_BACKEND=mock|gitnexus_cli|gitnexus_http
+LEGACY_PILOT_CODE_CORE_BACKEND=mock|gitnexus_cli
 GITNEXUS_BIN=gitnexus
-GITNEXUS_REPO_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main
-GITNEXUS_HTTP_BASE_URL=http://127.0.0.1:4747
+GITNEXUS_REPO_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main\gitnexus
 GITNEXUS_TIMEOUT_SECONDS=60
 LEGACY_PILOT_MAX_GRAPH_NODES=200
 LEGACY_PILOT_MAX_GRAPH_EDGES=400
+LEGACY_PILOT_RUN_GITNEXUS_INTEGRATION=1
 ```
 
 默认值：
@@ -556,6 +559,8 @@ LEGACY_PILOT_MAX_GRAPH_EDGES=400
 ```
 
 这样测试环境不需要 GitNexus，集成环境通过配置启用真实结构 1。
+当前真实 backend 只有 `gitnexus_cli`。`gitnexus_http` 不在首版实现范围内。
+当选择 `gitnexus_cli` 且 GitNexus 不可用时，系统返回 recoverable `ContractError`，不静默回退到 mock。
 
 ## 13. Java/Spring 首版范围
 
@@ -670,9 +675,10 @@ GitNexus not indexed becomes recoverable ContractError.
 启用真实 GitNexus 时，使用小型 Java/Spring fixture：
 
 ```text
-@RestController + @RequestMapping + @GetMapping
+@RestController + @GetMapping
 Controller method calls Service method
 Service method calls Mapper method
+No MyBatis XML or SQL table fixture
 ```
 
 首版 integration 验收：
@@ -757,6 +763,9 @@ adapter 输出再次经过 Pydantic response_model 校验。
 ```text
 无 GitNexus 环境时跳过 integration，不影响单元测试。
 启用 GitNexus 环境时跑真实索引和查询。
+启用 integration 需要同时设置 LEGACY_PILOT_RUN_GITNEXUS_INTEGRATION=1、GITNEXUS_BIN、GITNEXUS_REPO_ROOT。
+源码 checkout 测试时，GITNEXUS_BIN 可以指向类似 Q:\tmp\gitnexus-local.cmd 的 wrapper。
+在受限 sandbox 中运行真实 GitNexus 可能需要提升权限，因为 GitNexus 会写入 fixture .gitnexus 和用户级 registry。
 ```
 
 ## 17. 运行与降级
@@ -772,6 +781,8 @@ LEGACY_PILOT_CODE_CORE_BACKEND=mock
 ```text
 LEGACY_PILOT_CODE_CORE_BACKEND=gitnexus_cli
 GITNEXUS_BIN=gitnexus
+GITNEXUS_REPO_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main\gitnexus
+GITNEXUS_TIMEOUT_SECONDS=120
 ```
 
 如果 GitNexus 不可用：
@@ -812,7 +823,7 @@ QueryGraph:
   Python 保持中间件主控，TypeScript/Node 保持 GitNexus 算法执行。
 
 首版调用方式:
-  先实现 gitnexus_cli adapter，再扩展 gitnexus_http。
+  已实现 gitnexus_cli adapter；gitnexus_http 不属于首版。
 
 首版领域:
   Java/Spring Boot route/controller/service 图谱。
@@ -827,7 +838,6 @@ QueryGraph:
 实施前需要确认的选择：
 
 ```text
-1. 首个真实调用后端使用 gitnexus_cli 还是 gitnexus_http。
-2. Java/Spring fixture 是否使用我们自建 demo repo，还是接入你的真实 legacy repo 子集。
-3. MyBatis/SQL extractor 是否作为结构 1 首版验收条件，还是第二阶段开发。
+1. Java/Spring fixture 默认使用 tests/fixtures/java_spring_demo。
+2. MyBatis/SQL extractor 作为第二阶段开发，不是结构 1 首版验收条件。
 ```

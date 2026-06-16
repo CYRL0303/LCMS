@@ -3,3 +3,4 @@ __pycache__/
 *.py[cod]
 .venv/
 uvicorn*.log
+tests/fixtures/java_spring_demo/.gitnexus/
