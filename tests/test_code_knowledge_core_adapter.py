@@ -4,7 +4,10 @@ import pytest
 
 from legacy_pilot.code_knowledge_core.adapter import (
     CodeKnowledgeCoreAdapter,
+    GitNexusCliCodeKnowledgeCoreAdapter,
     MockCodeKnowledgeCoreAdapter,
+    UnsupportedCodeKnowledgeCoreBackendAdapter,
+    create_code_knowledge_core_adapter,
 )
 from legacy_pilot.code_knowledge_core.errors import (
     CodeKnowledgeCoreError,
@@ -298,3 +301,134 @@ class TestCodeKnowledgeCoreErrors:
 
         assert error.source_module == "code_knowledge_core"
         assert "gitnexus" not in str(error).lower()
+
+
+class FakeGitNexusClient:
+    def __init__(self):
+        self.index_called = False
+        self.query_called = False
+
+    def index_repo(self, request: RepoIndexRequest) -> dict:
+        self.index_called = True
+        return {
+            "repo_id": request.repo_id,
+            "graph_id": "GRAPH-GN",
+            "trace_id": f"TRACE-INDEX-{request.repo_id}",
+            "nodes": [
+                {
+                    "id": "GN-NODE-SERVICE",
+                    "type": "Method",
+                    "name": "getVersion",
+                    "properties": {
+                        "qualifiedName": "DatasetService.getVersion",
+                        "filePath": "src/main/java/DatasetService.java",
+                        "startLine": 40,
+                        "endLine": 45,
+                    },
+                }
+            ],
+            "relationships": [],
+        }
+
+    def query_graph(self, query: GraphQuery) -> dict:
+        self.query_called = True
+        return {
+            "graph_id": query.graph_id,
+            "nodes": [
+                {
+                    "id": "GN-NODE-SERVICE",
+                    "type": "Method",
+                    "name": "getVersion",
+                    "properties": {
+                        "qualifiedName": "DatasetService.getVersion",
+                        "filePath": "src/main/java/DatasetService.java",
+                        "startLine": 40,
+                        "endLine": 45,
+                    },
+                }
+            ],
+            "relationships": [],
+            "paths": [["GN-NODE-SERVICE"]],
+            "not_found": False,
+        }
+
+
+class TestGitNexusCliAdapter:
+    def test_index_repo_maps_client_payload_to_graph_snapshot(self):
+        client = FakeGitNexusClient()
+        adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+            client=client,
+            now=lambda: datetime(2026, 6, 15, tzinfo=UTC),
+        )
+        request = RepoIndexRequest(
+            repo_id="repo-real",
+            repo_uri="file:///repo-real",
+            language_hint="java",
+            parser_profile="spring-boot",
+            contract_version="1.0.0",
+        )
+
+        snapshot = adapter.index_repo(request)
+
+        assert client.index_called is True
+        assert isinstance(snapshot, GraphSnapshot)
+        assert snapshot.graph_id == "GRAPH-GN"
+        assert snapshot.repo_id == "repo-real"
+        assert snapshot.nodes[0].qualified_name == "DatasetService.getVersion"
+        assert snapshot.evidence_refs
+
+    def test_query_graph_maps_client_payload_to_graph_context(self):
+        client = FakeGitNexusClient()
+        adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+            client=client,
+            now=lambda: datetime(2026, 6, 15, tzinfo=UTC),
+        )
+        query = GraphQuery(
+            repo_id="repo-real",
+            graph_id="GRAPH-GN",
+            query_terms=["DatasetService.getVersion"],
+            max_depth=3,
+            trace_id="TRACE-Q-REAL",
+            contract_version="1.0.0",
+        )
+
+        context = adapter.query_graph(query)
+
+        assert client.query_called is True
+        assert isinstance(context, GraphContext)
+        assert context.trace_id == "TRACE-Q-REAL"
+        assert context.matched_nodes[0].qualified_name == "DatasetService.getVersion"
+        assert context.graph_paths == [["DatasetService.getVersion"]]
+
+
+class TestBackendFactory:
+    def test_missing_backend_selects_mock_adapter(self, monkeypatch):
+        monkeypatch.delenv("LEGACY_PILOT_CODE_CORE_BACKEND", raising=False)
+
+        adapter = create_code_knowledge_core_adapter()
+
+        assert isinstance(adapter, MockCodeKnowledgeCoreAdapter)
+
+    def test_mock_backend_selects_mock_adapter(self, monkeypatch):
+        monkeypatch.setenv("LEGACY_PILOT_CODE_CORE_BACKEND", "mock")
+
+        adapter = create_code_knowledge_core_adapter()
+
+        assert isinstance(adapter, MockCodeKnowledgeCoreAdapter)
+
+    def test_gitnexus_cli_backend_selects_real_adapter_without_running_gitnexus(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("LEGACY_PILOT_CODE_CORE_BACKEND", "gitnexus_cli")
+
+        adapter = create_code_knowledge_core_adapter()
+
+        assert isinstance(adapter, GitNexusCliCodeKnowledgeCoreAdapter)
+
+    def test_unsupported_backend_selects_recoverable_failing_adapter(self, monkeypatch):
+        monkeypatch.setenv("LEGACY_PILOT_CODE_CORE_BACKEND", "bad-backend")
+
+        adapter = create_code_knowledge_core_adapter()
+
+        assert isinstance(adapter, UnsupportedCodeKnowledgeCoreBackendAdapter)

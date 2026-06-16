@@ -2,7 +2,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from legacy_pilot.code_knowledge_core.adapter import CodeKnowledgeCoreAdapter
+from legacy_pilot.code_knowledge_core.adapter import (
+    CodeKnowledgeCoreAdapter,
+    GitNexusCliCodeKnowledgeCoreAdapter,
+    MockCodeKnowledgeCoreAdapter,
+)
 from legacy_pilot.code_knowledge_core.errors import IndexingError, QueryError
 from legacy_pilot.contracts.errors import ContractViolation
 from legacy_pilot.contracts.models import (
@@ -218,6 +222,13 @@ def test_save_incident_requires_user_confirmation():
 
 
 class TestDefaultRouterPreservesMockBehavior:
+    def test_default_router_uses_mock_adapter_when_backend_is_missing(self, monkeypatch):
+        monkeypatch.delenv("LEGACY_PILOT_CODE_CORE_BACKEND", raising=False)
+
+        router = MiddlewareRouter()
+
+        assert isinstance(router._code_knowledge_core_adapter, MockCodeKnowledgeCoreAdapter)
+
     def test_default_router_index_repo_returns_same_mock_snapshot(self):
         router = MiddlewareRouter()
         request = RepoIndexRequest(
@@ -307,6 +318,84 @@ class TestGateInterceptsBeforeAdapter:
 
         assert excinfo.value.error.error_code == "UNSUPPORTED_CONTRACT_VERSION"
         assert adapter.query_called is False
+
+    def test_unsupported_backend_error_is_returned_only_after_contract_gate(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("LEGACY_PILOT_CODE_CORE_BACKEND", "bad-backend")
+        router = MiddlewareRouter()
+        request = RepoIndexRequest(
+            repo_id="r",
+            repo_uri="file:///r",
+            language_hint="java",
+            parser_profile="default",
+            contract_version="2.0.0",
+        )
+
+        with pytest.raises(ContractViolation) as excinfo:
+            router.index_repo(request)
+
+        assert excinfo.value.error.error_code == "UNSUPPORTED_CONTRACT_VERSION"
+
+
+class TestBackendSelection:
+    def test_router_with_custom_adapter_delegates_structure_1_calls(self):
+        adapter = RecordingFakeAdapter()
+        router = MiddlewareRouter(code_knowledge_core_adapter=adapter)
+        request = RepoIndexRequest(
+            repo_id="repo-custom",
+            repo_uri="file:///repo-custom",
+            language_hint="java",
+            parser_profile="default",
+            contract_version="1.0.0",
+        )
+        query = GraphQuery(
+            repo_id="repo-custom",
+            graph_id="GRAPH-REC",
+            query_terms=["x"],
+            max_depth=2,
+            trace_id="TRACE-CUSTOM",
+            contract_version="1.0.0",
+        )
+
+        snapshot = router.index_repo(request)
+        context = router.query_graph(query)
+
+        assert adapter.index_called is True
+        assert adapter.query_called is True
+        assert snapshot.graph_id == "GRAPH-REC"
+        assert context.trace_id == "TRACE-CUSTOM"
+
+    def test_router_selects_gitnexus_cli_adapter_without_running_gitnexus(self, monkeypatch):
+        monkeypatch.setenv("LEGACY_PILOT_CODE_CORE_BACKEND", "gitnexus_cli")
+
+        router = MiddlewareRouter()
+
+        assert isinstance(
+            router._code_knowledge_core_adapter,
+            GitNexusCliCodeKnowledgeCoreAdapter,
+        )
+
+    def test_unsupported_backend_returns_recoverable_code_core_error(self, monkeypatch):
+        monkeypatch.setenv("LEGACY_PILOT_CODE_CORE_BACKEND", "bad-backend")
+        router = MiddlewareRouter()
+        request = RepoIndexRequest(
+            repo_id="repo-bad",
+            repo_uri="file:///repo-bad",
+            language_hint="java",
+            parser_profile="default",
+            contract_version="1.0.0",
+        )
+
+        with pytest.raises(ContractViolation) as excinfo:
+            router.index_repo(request)
+
+        error = excinfo.value.error
+        assert error.trace_id == "TRACE-INDEX-repo-bad"
+        assert error.source_module == "code_knowledge_core"
+        assert error.recoverable is True
+        assert error.message == "Unsupported Code Knowledge Core backend: bad-backend"
 
 
 class TestCodeKnowledgeCoreErrorConversion:

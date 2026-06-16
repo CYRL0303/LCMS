@@ -2,7 +2,15 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
+from legacy_pilot.code_knowledge_core.adapter import CodeKnowledgeCoreAdapter
+from legacy_pilot.contracts.models import (
+    GraphContext,
+    GraphQuery,
+    GraphSnapshot,
+    RepoIndexRequest,
+)
 from legacy_pilot.middleware.app import create_app
+from legacy_pilot.middleware.router import MiddlewareRouter
 
 
 def alert_payload(contract_version: str = "1.0.0") -> dict:
@@ -19,6 +27,25 @@ def alert_payload(contract_version: str = "1.0.0") -> dict:
         "source": "demo-cli",
         "contract_version": contract_version,
     }
+
+
+class ApiFakeAdapter(CodeKnowledgeCoreAdapter):
+    def __init__(self):
+        self.query_called = False
+
+    def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
+        raise AssertionError("index_repo was not expected")
+
+    def query_graph(self, query: GraphQuery) -> GraphContext:
+        self.query_called = True
+        return GraphContext(
+            trace_id=query.trace_id,
+            matched_nodes=[],
+            matched_edges=[],
+            graph_paths=[["custom-router"]],
+            evidence_refs=[],
+            confidence=0.0,
+        )
 
 
 def test_health_endpoint_exposes_middleware_identity():
@@ -107,6 +134,30 @@ def test_query_graph_endpoint_returns_graph_context():
     ]
     assert body["evidence_refs"]
     assert body["confidence"] == 0.88
+
+
+def test_create_app_with_custom_router_preserves_injection_path():
+    adapter = ApiFakeAdapter()
+    router = MiddlewareRouter(code_knowledge_core_adapter=adapter)
+    client = TestClient(create_app(router=router))
+
+    response = client.post(
+        "/v1/graph/query",
+        json={
+            "repo_id": "repo-demo",
+            "graph_id": "GRAPH-CUSTOM",
+            "query_terms": ["x"],
+            "node_filters": [],
+            "edge_filters": [],
+            "max_depth": 2,
+            "trace_id": "TRACE-CUSTOM",
+            "contract_version": "1.0.0",
+        },
+    )
+
+    assert response.status_code == 200
+    assert adapter.query_called is True
+    assert response.json()["graph_paths"] == [["custom-router"]]
 
 
 def test_unsupported_contract_version_returns_contract_error_envelope():

@@ -8,11 +8,18 @@ class CodeKnowledgeCoreError(Exception):
     ContractError envelope without leaking internal stack traces.
     """
 
-    def __init__(self, message: str, *, recoverable: bool = True):
+    def __init__(
+        self,
+        message: str,
+        *,
+        recoverable: bool = True,
+        diagnostics: dict[str, str] | None = None,
+    ):
         super().__init__(message)
         self.message = message
         self.recoverable = recoverable
         self.source_module = SOURCE_MODULE
+        self.diagnostics = diagnostics or {}
 
 
 class IndexingError(CodeKnowledgeCoreError):

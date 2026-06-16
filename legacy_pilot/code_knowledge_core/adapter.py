@@ -1,7 +1,15 @@
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
+from legacy_pilot.code_knowledge_core.errors import IndexingError, QueryError
+from legacy_pilot.code_knowledge_core.gitnexus_client import GitNexusCliClient
+from legacy_pilot.code_knowledge_core.gitnexus_mapper import (
+    map_index_payload,
+    map_query_payload,
+)
 from legacy_pilot.contracts.models import (
     Edge,
     EvidenceRef,
@@ -195,3 +203,55 @@ class MockCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
             confidence=confidence,
             created_at=self._now(),
         )
+
+
+class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
+    """Real Code Knowledge Core adapter backed by GitNexus CLI output."""
+
+    def __init__(
+        self,
+        *,
+        client: Any | None = None,
+        now: Callable[[], datetime] | None = None,
+    ):
+        self._client = client or GitNexusCliClient()
+        self._now = now or (lambda: datetime.now(UTC))
+
+    def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
+        payload = self._client.index_repo(request)
+        return map_index_payload(payload, now=self._now)
+
+    def query_graph(self, query: GraphQuery) -> GraphContext:
+        payload = self._client.query_graph(query)
+        return map_query_payload(payload, query=query, now=self._now)
+
+
+class UnsupportedCodeKnowledgeCoreBackendAdapter(CodeKnowledgeCoreAdapter):
+    """Failing adapter used so router contract gates still run first."""
+
+    def __init__(self, backend: str):
+        self._backend = backend
+
+    def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
+        raise IndexingError(self._message(), recoverable=True)
+
+    def query_graph(self, query: GraphQuery) -> GraphContext:
+        raise QueryError(self._message(), recoverable=True)
+
+    def _message(self) -> str:
+        return f"Unsupported Code Knowledge Core backend: {self._backend}"
+
+
+def create_code_knowledge_core_adapter(
+    *,
+    backend: str | None = None,
+    now: Callable[[], datetime] | None = None,
+    gitnexus_client: GitNexusCliClient | None = None,
+) -> CodeKnowledgeCoreAdapter:
+    selected_backend = backend or os.getenv("LEGACY_PILOT_CODE_CORE_BACKEND") or "mock"
+    normalized_backend = selected_backend.strip().lower()
+    if normalized_backend == "mock":
+        return MockCodeKnowledgeCoreAdapter(now=now)
+    if normalized_backend == "gitnexus_cli":
+        return GitNexusCliCodeKnowledgeCoreAdapter(client=gitnexus_client, now=now)
+    return UnsupportedCodeKnowledgeCoreBackendAdapter(selected_backend)

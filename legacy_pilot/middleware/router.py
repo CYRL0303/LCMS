@@ -4,7 +4,7 @@ from typing import Any
 
 from legacy_pilot.code_knowledge_core.adapter import (
     CodeKnowledgeCoreAdapter,
-    MockCodeKnowledgeCoreAdapter,
+    create_code_knowledge_core_adapter,
 )
 from legacy_pilot.code_knowledge_core.errors import CodeKnowledgeCoreError
 from legacy_pilot.contracts.enums import ErrorCode
@@ -39,7 +39,7 @@ class MiddlewareRouter:
         self._now = now or (lambda: datetime.now(UTC))
         self._code_knowledge_core_adapter = (
             code_knowledge_core_adapter
-            or MockCodeKnowledgeCoreAdapter(now=self._now)
+            or create_code_knowledge_core_adapter(now=self._now)
         )
 
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
