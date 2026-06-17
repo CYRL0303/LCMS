@@ -150,6 +150,72 @@ def test_node_evidence_uses_created_at_from_injected_clock_and_deterministic_id(
     )
 
 
+def test_sql_node_maps_to_sql_evidence_source_type():
+    node = map_gitnexus_node(
+        {
+            "id": "SQL:mapper/DatasetMapper.xml:selectVersionById",
+            "type": "SQL",
+            "name": "selectVersionById",
+            "filePath": "src/main/resources/mapper/DatasetMapper.xml",
+            "startLine": 5,
+            "endLine": 9,
+            "source_type": "sql",
+            "extraction_method": "regex",
+        },
+        graph_id="GRAPH-1",
+        repo_id="repo-1",
+        trace_id="TRACE-1",
+        now=fixed_now,
+    )
+
+    assert node.evidence_refs[0].source_type == "sql"
+    assert node.evidence_refs[0].extraction_method == "regex"
+
+
+def test_config_node_maps_to_config_evidence_source_type():
+    node = map_gitnexus_node(
+        {
+            "id": "Config:src/main/resources/application.yml:spring.datasource.url",
+            "type": "Config",
+            "name": "spring.datasource.url",
+            "filePath": "src/main/resources/application.yml",
+            "startLine": 2,
+            "endLine": 2,
+            "source_type": "config",
+            "extraction_method": "regex",
+        },
+        graph_id="GRAPH-1",
+        repo_id="repo-1",
+        trace_id="TRACE-1",
+        now=fixed_now,
+    )
+
+    assert node.evidence_refs[0].source_type == "config"
+
+
+def test_llm_semantic_node_maps_to_llm_semantic_summary_evidence_source_type():
+    node = map_gitnexus_node(
+        {
+            "id": "SemanticSummary:DatasetService.getVersion",
+            "type": "Function Semantic Summary",
+            "name": "DatasetService.getVersion summary",
+            "filePath": "src/main/java/com/legacy/DatasetService.java",
+            "startLine": 12,
+            "endLine": 18,
+            "source_type": "llm_semantic_summary",
+            "extraction_method": "llm",
+            "confidence": 0.6,
+        },
+        graph_id="GRAPH-1",
+        repo_id="repo-1",
+        trace_id="TRACE-1",
+        now=fixed_now,
+    )
+
+    assert node.evidence_refs[0].source_type == "llm_semantic_summary"
+    assert node.evidence_refs[0].extraction_method == "llm"
+
+
 def test_relationship_evidence_maps_to_edge_gitnexus_metadata():
     nodes_by_id = {
         "GN-NODE-SERVICE": map_gitnexus_node(
@@ -185,6 +251,37 @@ def test_relationship_evidence_maps_to_edge_gitnexus_metadata():
     assert edge.evidence_refs[0].source_type == "code"
     assert edge.evidence_refs[0].source_id == "GN-REL-CALLS"
     assert edge.confidence == 1.0
+
+
+def test_relationship_maps_payload_source_type_to_evidence_source_type():
+    nodes_by_id = {
+        "GN-NODE-SERVICE": map_gitnexus_node(
+            service_node_payload(),
+            graph_id="GRAPH-GN",
+            repo_id="repo-demo",
+            trace_id="TRACE-Q-001",
+            now=fixed_now,
+        ),
+        "GN-NODE-MAPPER": map_gitnexus_node(
+            mapper_node_payload(),
+            graph_id="GRAPH-GN",
+            repo_id="repo-demo",
+            trace_id="TRACE-Q-001",
+            now=fixed_now,
+        ),
+    }
+
+    edge = map_gitnexus_edge(
+        relationship_payload(source_type="sql", extraction_method="regex"),
+        graph_id="GRAPH-GN",
+        trace_id="TRACE-Q-001",
+        nodes_by_id=nodes_by_id,
+        now=fixed_now,
+    )
+
+    assert edge is not None
+    assert edge.evidence_refs[0].source_type == "sql"
+    assert edge.evidence_refs[0].extraction_method == "regex"
 
 
 def test_edge_with_no_source_node_location_uses_target_node_location():
@@ -292,6 +389,25 @@ def test_graph_snapshot_evidence_refs_deduplicate_by_evidence_id():
 
     all_evidence_ids = [ref.evidence_id for ref in snapshot.evidence_refs]
     assert all_evidence_ids == list(dict.fromkeys(all_evidence_ids))
+
+
+def test_graph_snapshot_maps_structure1_metadata_fields():
+    payload = {
+        "graph_id": "GRAPH-GN",
+        "repo_id": "repo-demo",
+        "trace_id": "TRACE-INDEX-repo-demo",
+        "nodes": [service_node_payload()],
+        "relationships": [],
+        "parser_version": "gitnexus_cli+cypher_v1",
+        "semantic_enrichment_version": None,
+        "metadata": {"structure": "code_knowledge_core"},
+    }
+
+    snapshot = map_index_payload(payload, now=fixed_now)
+
+    assert snapshot.parser_version == "gitnexus_cli+cypher_v1"
+    assert snapshot.semantic_enrichment_version is None
+    assert snapshot.metadata["structure"] == "code_knowledge_core"
 
 
 def test_graph_context_trace_id_equals_input_query_trace_id():

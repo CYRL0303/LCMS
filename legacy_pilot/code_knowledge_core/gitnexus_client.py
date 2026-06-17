@@ -14,6 +14,7 @@ DEFAULT_GITNEXUS_BIN = "gitnexus"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_GRAPH_NODES = 5000
 DEFAULT_MAX_GRAPH_EDGES = 10000
+GITNEXUS_CYPHER_PARSER_VERSION = "gitnexus_cli+cypher_v1"
 
 
 class GitNexusCliClient:
@@ -54,10 +55,11 @@ class GitNexusCliClient:
         self.last_diagnostics: dict[str, str] = {}
 
     def index_repo(self, request: RepoIndexRequest) -> dict[str, Any]:
+        repo_path = _repo_path(request.repo_uri)
         analyze_command = [
             self.gitnexus_bin,
             "analyze",
-            _repo_path(request.repo_uri),
+            repo_path,
             "--skip-git",
             "--index-only",
             "--name",
@@ -78,7 +80,9 @@ class GitNexusCliClient:
             ],
             operation="index",
         )
-        return self._normalize_cypher_graph_payload(raw_payload, request=request)
+        payload = self._normalize_cypher_graph_payload(raw_payload, request=request)
+        payload["repo_path"] = repo_path
+        return payload
 
     def query_graph(self, query: GraphQuery) -> dict[str, Any]:
         uid = self._resolve_route_controller_uid(query)
@@ -268,6 +272,12 @@ class GitNexusCliClient:
             "repo_id": request.repo_id,
             "graph_id": f"GRAPH-{request.repo_id}",
             "trace_id": f"TRACE-INDEX-{request.repo_id}",
+            "parser_version": GITNEXUS_CYPHER_PARSER_VERSION,
+            "semantic_enrichment_version": None,
+            "metadata": {
+                "code_knowledge_core_backend": "gitnexus_cli",
+                "graph_source": "gitnexus_cypher_markdown",
+            },
             "nodes": list(nodes_by_id.values())[: self.max_graph_nodes],
             "relationships": relationships[: self.max_graph_edges],
         }

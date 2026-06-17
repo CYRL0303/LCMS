@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/legacy
+    username: legacy_user
+legacy:
+  dataset:
+    cache-enabled: true

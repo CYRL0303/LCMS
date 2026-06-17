@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +24,11 @@ from legacy_pilot.contracts.models import (
     GraphSnapshot,
     Node,
     RepoIndexRequest,
+)
+
+
+PRODUCTION_FIXTURE_ROOT = (
+    Path(__file__).parent / "fixtures" / "java_spring_production_demo"
 )
 
 
@@ -400,6 +406,63 @@ class TestGitNexusCliAdapter:
         assert context.matched_nodes[0].qualified_name == "DatasetService.getVersion"
         assert context.graph_paths == [["DatasetService.getVersion"]]
 
+    def test_index_repo_wraps_enricher_failures_as_indexing_error(self):
+        def malformed_config_enricher(request: RepoIndexRequest) -> dict:
+            raise ValueError("malformed YAML")
+
+        adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+            client=FakeGitNexusClient(),
+            index_enrichers=[malformed_config_enricher],
+            now=lambda: datetime(2026, 6, 15, tzinfo=UTC),
+        )
+        request = RepoIndexRequest(
+            repo_id="repo-real",
+            repo_uri="file:///repo-real",
+            language_hint="java",
+            parser_profile="spring-boot",
+            contract_version="1.0.0",
+        )
+
+        with pytest.raises(IndexingError) as excinfo:
+            adapter.index_repo(request)
+
+        error = excinfo.value
+        assert error.message == "Structure 1 enrichment failed while indexing repo."
+        assert error.recoverable is True
+        assert error.diagnostics == {
+            "enricher": "malformed_config_enricher",
+            "error_type": "ValueError",
+        }
+
+    def test_query_graph_wraps_enricher_failures_as_query_error(self):
+        def unreadable_query_enricher(query: GraphQuery) -> dict:
+            raise PermissionError("repo cache denied")
+
+        adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+            client=FakeGitNexusClient(),
+            query_enrichers=[unreadable_query_enricher],
+            now=lambda: datetime(2026, 6, 15, tzinfo=UTC),
+        )
+        query = GraphQuery(
+            repo_id="repo-real",
+            graph_id="GRAPH-GN",
+            query_terms=["DatasetService.getVersion"],
+            max_depth=3,
+            trace_id="TRACE-Q-REAL",
+            contract_version="1.0.0",
+        )
+
+        with pytest.raises(QueryError) as excinfo:
+            adapter.query_graph(query)
+
+        error = excinfo.value
+        assert error.message == "Structure 1 enrichment failed while querying graph."
+        assert error.recoverable is True
+        assert error.diagnostics == {
+            "enricher": "unreadable_query_enricher",
+            "error_type": "PermissionError",
+        }
+
 
 class TestBackendFactory:
     def test_missing_backend_selects_mock_adapter(self, monkeypatch):
@@ -425,6 +488,39 @@ class TestBackendFactory:
         adapter = create_code_knowledge_core_adapter()
 
         assert isinstance(adapter, GitNexusCliCodeKnowledgeCoreAdapter)
+
+    def test_gitnexus_cli_backend_uses_default_structure1_enrichers(self):
+        adapter = create_code_knowledge_core_adapter(
+            backend="gitnexus_cli",
+            gitnexus_client=FakeGitNexusClient(),
+            now=lambda: datetime(2026, 6, 16, tzinfo=UTC),
+        )
+        request = RepoIndexRequest(
+            repo_id="repo-prod",
+            repo_uri=PRODUCTION_FIXTURE_ROOT.resolve().as_uri(),
+            language_hint="java",
+            parser_profile="spring-boot",
+            contract_version="1.0.0",
+        )
+
+        snapshot = adapter.index_repo(request)
+
+        node_types = {node.type for node in snapshot.nodes}
+        edge_types = {edge.type for edge in snapshot.edges}
+        source_types = {evidence.source_type for evidence in snapshot.evidence_refs}
+
+        assert snapshot.parser_version == "gitnexus_cli+structure1_sql_config_exception_v1"
+        assert snapshot.semantic_enrichment_version is None
+        assert snapshot.metadata["code_knowledge_core_backend"] == "gitnexus_cli"
+        assert snapshot.metadata["graph_source"] == "gitnexus_cypher_markdown"
+        assert snapshot.metadata["enrichment_sources"] == [
+            "mybatis_sql",
+            "java_config",
+            "java_exception",
+        ]
+        assert {"SQL", "Table", "Config", "Exception"}.issubset(node_types)
+        assert {"EXECUTES_SQL", "READS_TABLE", "THROWS_EXCEPTION"}.issubset(edge_types)
+        assert {"code", "sql", "config"}.issubset(source_types)
 
     def test_unsupported_backend_selects_recoverable_failing_adapter(self, monkeypatch):
         monkeypatch.setenv("LEGACY_PILOT_CODE_CORE_BACKEND", "bad-backend")

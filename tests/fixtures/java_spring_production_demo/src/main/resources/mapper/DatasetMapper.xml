@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<mapper namespace="com.legacy.DatasetMapper">
+  <select id="selectVersionById" resultType="string">
+    SELECT version
+    FROM dataset_version
+    WHERE dataset_id = #{datasetId}
+  </select>
+</mapper>

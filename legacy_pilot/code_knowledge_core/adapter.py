@@ -2,10 +2,25 @@ import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from legacy_pilot.code_knowledge_core.errors import IndexingError, QueryError
-from legacy_pilot.code_knowledge_core.gitnexus_client import GitNexusCliClient
+from legacy_pilot.code_knowledge_core.errors import (
+    CodeKnowledgeCoreError,
+    IndexingError,
+    QueryError,
+)
+from legacy_pilot.code_knowledge_core.enrichment import merge_graph_payloads
+from legacy_pilot.code_knowledge_core.extractors.java_config import (
+    extract_java_config_graph,
+)
+from legacy_pilot.code_knowledge_core.extractors.java_exception import (
+    extract_java_exception_graph,
+)
+from legacy_pilot.code_knowledge_core.extractors.java_sql import (
+    extract_mybatis_sql_graph,
+)
+from legacy_pilot.code_knowledge_core.gitnexus_client import GitNexusCliClient, _repo_path
 from legacy_pilot.code_knowledge_core.gitnexus_mapper import (
     map_index_payload,
     map_query_payload,
@@ -19,6 +34,14 @@ from legacy_pilot.contracts.models import (
     Node,
     RepoIndexRequest,
 )
+
+
+STRUCTURE1_ENRICHED_PARSER_VERSION = "gitnexus_cli+structure1_sql_config_exception_v1"
+DEFAULT_STRUCTURE1_ENRICHMENT_SOURCES = [
+    "mybatis_sql",
+    "java_config",
+    "java_exception",
+]
 
 
 class CodeKnowledgeCoreAdapter(ABC):
@@ -213,16 +236,50 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
         *,
         client: Any | None = None,
         now: Callable[[], datetime] | None = None,
+        index_enrichers: list[
+            Callable[[RepoIndexRequest], dict[str, Any]]
+        ] | None = None,
+        query_enrichers: list[Callable[[GraphQuery], dict[str, Any]]] | None = None,
     ):
         self._client = client or GitNexusCliClient()
         self._now = now or (lambda: datetime.now(UTC))
+        uses_default_index_enrichers = index_enrichers is None
+        self._index_enrichers = (
+            index_enrichers
+            if not uses_default_index_enrichers
+            else _default_structure1_enrichers()
+        )
+        self._index_enrichment_sources = (
+            list(DEFAULT_STRUCTURE1_ENRICHMENT_SOURCES)
+            if uses_default_index_enrichers
+            else [_enricher_name(enricher) for enricher in self._index_enrichers]
+        )
+        self._index_parser_version = (
+            STRUCTURE1_ENRICHED_PARSER_VERSION if uses_default_index_enrichers else None
+        )
+        self._query_enrichers = query_enrichers or []
 
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
         payload = self._client.index_repo(request)
+        if self._index_enrichers:
+            payload = merge_graph_payloads(
+                payload,
+                _run_index_enrichers(self._index_enrichers, request),
+            )
+            payload = _with_enrichment_metadata(
+                payload,
+                enrichment_sources=self._index_enrichment_sources,
+                parser_version=self._index_parser_version,
+            )
         return map_index_payload(payload, now=self._now)
 
     def query_graph(self, query: GraphQuery) -> GraphContext:
         payload = self._client.query_graph(query)
+        if self._query_enrichers:
+            payload = merge_graph_payloads(
+                payload,
+                _run_query_enrichers(self._query_enrichers, query),
+            )
         return map_query_payload(payload, query=query, now=self._now)
 
 
@@ -255,3 +312,106 @@ def create_code_knowledge_core_adapter(
     if normalized_backend == "gitnexus_cli":
         return GitNexusCliCodeKnowledgeCoreAdapter(client=gitnexus_client, now=now)
     return UnsupportedCodeKnowledgeCoreBackendAdapter(selected_backend)
+
+
+def _default_structure1_enrichers() -> list[Callable[[RepoIndexRequest], dict[str, Any]]]:
+    return [
+        _extract_mybatis_sql_for_request,
+        _extract_java_config_for_request,
+        _extract_java_exception_for_request,
+    ]
+
+
+def _with_enrichment_metadata(
+    payload: dict[str, Any],
+    *,
+    enrichment_sources: list[str],
+    parser_version: str | None,
+) -> dict[str, Any]:
+    enriched = dict(payload)
+    metadata = payload.get("metadata")
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    metadata.setdefault("code_knowledge_core_backend", "gitnexus_cli")
+    metadata.setdefault("graph_source", "gitnexus_cypher_markdown")
+    metadata["enrichment_sources"] = list(enrichment_sources)
+    enriched["metadata"] = metadata
+    if parser_version is not None:
+        enriched["parser_version"] = parser_version
+    enriched.setdefault("semantic_enrichment_version", None)
+    return enriched
+
+
+def _run_index_enrichers(
+    enrichers: list[Callable[[RepoIndexRequest], dict[str, Any]]],
+    request: RepoIndexRequest,
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for enricher in enrichers:
+        try:
+            payloads.append(enricher(request))
+        except CodeKnowledgeCoreError:
+            raise
+        except Exception as exc:
+            raise IndexingError(
+                "Structure 1 enrichment failed while indexing repo.",
+                recoverable=True,
+                diagnostics={
+                    "enricher": _enricher_name(enricher),
+                    "error_type": exc.__class__.__name__,
+                },
+            ) from exc
+    return payloads
+
+
+def _run_query_enrichers(
+    enrichers: list[Callable[[GraphQuery], dict[str, Any]]],
+    query: GraphQuery,
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for enricher in enrichers:
+        try:
+            payloads.append(enricher(query))
+        except CodeKnowledgeCoreError:
+            raise
+        except Exception as exc:
+            raise QueryError(
+                "Structure 1 enrichment failed while querying graph.",
+                recoverable=True,
+                diagnostics={
+                    "enricher": _enricher_name(enricher),
+                    "error_type": exc.__class__.__name__,
+                },
+            ) from exc
+    return payloads
+
+
+def _enricher_name(enricher: Callable[..., dict[str, Any]]) -> str:
+    return getattr(enricher, "__name__", enricher.__class__.__name__)
+
+
+def _request_repo_root(request: RepoIndexRequest) -> Path:
+    return Path(_repo_path(request.repo_uri))
+
+
+def _extract_mybatis_sql_for_request(request: RepoIndexRequest) -> dict[str, Any]:
+    return extract_mybatis_sql_graph(
+        _request_repo_root(request),
+        repo_id=request.repo_id,
+        graph_id=f"GRAPH-{request.repo_id}",
+    )
+
+
+def _extract_java_config_for_request(request: RepoIndexRequest) -> dict[str, Any]:
+    return extract_java_config_graph(
+        _request_repo_root(request),
+        repo_id=request.repo_id,
+        graph_id=f"GRAPH-{request.repo_id}",
+    )
+
+
+def _extract_java_exception_for_request(request: RepoIndexRequest) -> dict[str, Any]:
+    return extract_java_exception_graph(
+        _request_repo_root(request),
+        repo_id=request.repo_id,
+        graph_id=f"GRAPH-{request.repo_id}",
+    )

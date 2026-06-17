@@ -9,6 +9,7 @@ from legacy_pilot.contracts.models import (
     Edge,
     EvidenceBackedItem,
     EvidenceRef,
+    GraphSnapshot,
     GraphQuery,
     RCAReport,
 )
@@ -147,3 +148,21 @@ def test_alert_event_accepts_contract_version_and_required_fields():
     )
 
     assert alert.contract_version == "1.0.0"
+
+
+def test_graph_snapshot_accepts_structure1_versions():
+    snapshot = GraphSnapshot(
+        graph_id="GRAPH-1",
+        repo_id="repo-1",
+        nodes=[],
+        edges=[],
+        evidence_refs=[],
+        generated_at=datetime.now(UTC),
+        parser_version="gitnexus_cli+structure1_sql_v1",
+        semantic_enrichment_version=None,
+        metadata={"structure": "code_knowledge_core"},
+    )
+
+    assert snapshot.parser_version == "gitnexus_cli+structure1_sql_v1"
+    assert snapshot.semantic_enrichment_version is None
+    assert snapshot.metadata["structure"] == "code_knowledge_core"

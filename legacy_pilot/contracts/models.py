@@ -87,6 +87,9 @@ class GraphSnapshot(ContractModel):
     edges: list[Edge]
     evidence_refs: list[EvidenceRef]
     generated_at: datetime
+    parser_version: str | None = None
+    semantic_enrichment_version: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class GraphQuery(ContractModel):

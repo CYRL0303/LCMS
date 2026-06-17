@@ -465,6 +465,158 @@ ambiguous query 的用户澄清协议
 CI 环境自动安装和构建 GitNexus
 ```
 
+## Task 0 实测 CLI 契约记录（2026-06-16）
+
+本次从 `Q:\Hackathons\QWENHack` 执行：
+
+```text
+Q:\tmp\gitnexus-local.cmd status
+Q:\tmp\gitnexus-local.cmd cypher "MATCH (n) RETURN n.id, n.name, n.filePath LIMIT 20" -r repo-java-spring-demo
+Q:\tmp\gitnexus-local.cmd cypher "MATCH (n)-[r]->(m) RETURN n.id, r.type, r.confidence, r.reason, m.id LIMIT 50" -r repo-java-spring-demo
+Q:\tmp\gitnexus-local.cmd context --uid "Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1" -r repo-java-spring-demo --content
+Q:\tmp\gitnexus-local.cmd query "DatasetService.getVersion" -r repo-java-spring-demo
+Q:\tmp\gitnexus-local.cmd query "/api/dataset/version" -r repo-java-spring-demo
+```
+
+`status` 的实测行为：
+
+```text
+未带 -r 时检查当前工作目录。
+在 Q:\Hackathons\QWENHack 下返回：
+Repository not indexed.
+Run: gitnexus analyze
+
+但命名仓库 repo-java-spring-demo 仍然可通过 -r 查询。
+```
+
+`cypher` 的实测 wrapper：
+
+```text
+返回 JSON object，字段为：
+markdown
+row_count
+
+真实查询结果在 markdown table 字符串中。
+adapter 必须解析 markdown table header/cell，不能假设 cypher 直接返回 nodes/edges JSON。
+```
+
+节点查询表头：
+
+```text
+n.id
+n.name
+n.filePath
+```
+
+代表性节点 id：
+
+```text
+Method:src/main/java/com/legacy/DatasetController.java:DatasetController.getVersion#1
+Method:src/main/java/com/legacy/DatasetMapper.java:DatasetMapper.selectVersionById#1
+Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1
+Class:src/main/java/com/legacy/DatasetController.java:DatasetController
+Interface:src/main/java/com/legacy/DatasetMapper.java:DatasetMapper
+File:src/main/java/com/legacy/DatasetService.java
+Route:/api/dataset/version
+proc_0_getversion
+comm_0
+Property:src/main/java/com/legacy/DatasetService.java:DatasetService.datasetMapper
+```
+
+边查询表头：
+
+```text
+n.id
+r.type
+r.confidence
+r.reason
+m.id
+```
+
+代表性边类型和 reason：
+
+```text
+CONTAINS, confidence 1
+HAS_METHOD, confidence 1
+CALLS, confidence 0.85, reason local-call
+CALLS, confidence 0.85, reason import-resolved
+HAS_PROPERTY, confidence 1
+ACCESSES, confidence 1, reason write
+STEP_IN_PROCESS, confidence 1, reason trace-detection
+ENTRY_POINT_OF, confidence 0.85, reason route-handler-entry-point
+MEMBER_OF, confidence 1, reason leiden-algorithm
+HANDLES_ROUTE, confidence 1, reason decorator-GetMapping
+DEFINES, confidence 1
+```
+
+`context --uid ... --content` 的实测字段：
+
+```text
+status
+symbol.uid
+symbol.name
+symbol.kind
+symbol.filePath
+symbol.startLine
+symbol.endLine
+symbol.content
+epistemic
+incoming.calls[].uid
+incoming.calls[].name
+incoming.calls[].filePath
+incoming.has_method[].uid
+incoming.has_method[].name
+incoming.has_method[].filePath
+outgoing.calls[].uid
+outgoing.calls[].name
+outgoing.calls[].filePath
+processes[].id
+processes[].name
+processes[].step_index
+processes[].step_count
+```
+
+`query` 的实测字段：
+
+```text
+processes[].id
+processes[].summary
+processes[].priority
+processes[].symbol_count
+processes[].process_type
+processes[].step_count
+process_symbols[].id
+process_symbols[].name
+process_symbols[].filePath
+process_symbols[].startLine
+process_symbols[].endLine
+process_symbols[].module
+process_symbols[].process_id
+process_symbols[].step_index
+definitions[].id
+definitions[].name
+definitions[].filePath
+definitions[].startLine
+definitions[].endLine
+timing.vector
+timing.bm25
+timing.merge
+timing.symbol_lookup
+timing.ranking
+timing.formatting
+timing.wall
+```
+
+已知 GitNexus FTS/query 限制：
+
+```text
+query 是 BM25/vector/process oriented 的发现入口，不是结构化图边 API。
+query "DatasetService.getVersion" 返回 process/definition context，不返回 CALLS 边。
+query "/api/dataset/version" 只返回 controller 侧 process symbol。
+结构 1 的可信结构事实仍应来自 cypher 和 context。
+adapter 可以把 query 作为可选发现/排序输入，不能把 query 输出默认当作结构事实。
+```
+
 所以准确结论是：
 
 ```text

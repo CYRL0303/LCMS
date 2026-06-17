@@ -48,6 +48,7 @@ def map_gitnexus_node(
                 start_line=start_line,
                 end_line=end_line,
                 excerpt=excerpt,
+                source_type=_source_type(payload),
                 extraction_method=_extraction_method(payload),
                 confidence=_confidence(payload, default=0.95),
                 now=clock,
@@ -112,6 +113,7 @@ def map_gitnexus_edge(
             start_line=start_line,
             end_line=end_line,
             excerpt=excerpt,
+            source_type=_source_type(payload),
             extraction_method=_extraction_method(payload),
             confidence=evidence_confidence,
             now=clock,
@@ -185,6 +187,11 @@ def map_index_payload(
         edges=edges,
         evidence_refs=_collect_evidence(nodes, edges),
         generated_at=clock(),
+        parser_version=_string_value(_get_any(payload, "parser_version", "parserVersion")),
+        semantic_enrichment_version=_string_value(
+            _get_any(payload, "semantic_enrichment_version", "semanticEnrichmentVersion")
+        ),
+        metadata=_metadata(payload),
     )
 
 
@@ -343,6 +350,11 @@ def _location(payload: dict[str, Any]) -> dict[str, Any]:
     return location if isinstance(location, dict) else {}
 
 
+def _metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = _get_any(payload, "metadata")
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
 def _source_location(
     file_path: str | None,
     start_line: int | None,
@@ -382,6 +394,15 @@ def _extraction_method(payload: dict[str, Any]) -> ExtractionMethod | str:
     )
 
 
+def _source_type(payload: dict[str, Any]) -> SourceType | str:
+    properties = _properties(payload)
+    return (
+        _get_any(payload, "source_type", "sourceType")
+        or _get_any(properties, "source_type", "sourceType")
+        or SourceType.CODE
+    )
+
+
 def _confidence(payload: dict[str, Any], *, default: float) -> float:
     properties = _properties(payload)
     value = _get_any(payload, "confidence")
@@ -402,6 +423,7 @@ def _evidence_ref(
     start_line: int | None,
     end_line: int | None,
     excerpt: str | None,
+    source_type: SourceType | str,
     extraction_method: ExtractionMethod | str,
     confidence: float,
     now: Callable[[], datetime],
@@ -415,7 +437,7 @@ def _evidence_ref(
             end_line=end_line,
         ),
         trace_id=trace_id,
-        source_type=SourceType.CODE,
+        source_type=source_type,
         source_id=source_id,
         file_path=file_path,
         start_line=start_line,

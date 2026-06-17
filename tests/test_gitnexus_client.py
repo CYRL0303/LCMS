@@ -127,6 +127,8 @@ def test_index_repo_runs_analyze_then_cypher_and_normalizes_graph():
     assert runner.calls[1][0][0][:2] == ["custom-gitnexus", "cypher"]
     assert payload["repo_id"] == "repo-demo"
     assert payload["graph_id"] == "GRAPH-repo-demo"
+    assert payload["repo_path"] == "/workspace/legacy-demo"
+    assert payload["parser_version"] == "gitnexus_cli+cypher_v1"
     assert payload["nodes"][0]["id"].startswith("Method:")
     assert payload["relationships"][0]["type"] == "CALLS"
     assert payload["relationships"][0]["source_id"].endswith("DatasetController.getVersion#1")
@@ -356,6 +358,7 @@ def test_valid_cypher_markdown_is_normalized_into_mapper_ready_index_payload():
     assert payload["repo_id"] == "repo-request"
     assert payload["graph_id"] == "GRAPH-repo-request"
     assert payload["trace_id"] == "TRACE-INDEX-repo-request"
+    assert payload["parser_version"] == "gitnexus_cli+cypher_v1"
     assert payload["nodes"][0]["id"].endswith("DatasetService.getVersion#1")
     assert payload["relationships"][0]["type"] == "CALLS"
     assert client.last_diagnostics["stderr"] == "index diagnostic"
