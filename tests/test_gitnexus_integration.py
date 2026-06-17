@@ -1,4 +1,5 @@
 import os
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -66,7 +67,7 @@ def test_query_graph_by_service_method_returns_traceable_graph_context():
     adapter = _gitnexus_adapter_or_skip()
     snapshot = _index_fixture(adapter)
     query = GraphQuery(
-        repo_id="repo-java-spring-demo",
+        repo_id=snapshot.repo_id,
         graph_id=snapshot.graph_id,
         query_terms=["DatasetService.getVersion"],
         node_filters=[],
@@ -87,7 +88,7 @@ def test_query_graph_by_route_returns_route_or_controller_context_when_available
     adapter = _gitnexus_adapter_or_skip()
     snapshot = _index_fixture(adapter)
     query = GraphQuery(
-        repo_id="repo-java-spring-demo",
+        repo_id=snapshot.repo_id,
         graph_id=snapshot.graph_id,
         query_terms=["/api/dataset/version"],
         node_filters=[],
@@ -140,12 +141,17 @@ def _gitnexus_adapter_or_skip() -> GitNexusCliCodeKnowledgeCoreAdapter:
 
 def _repo_index_request() -> RepoIndexRequest:
     return RepoIndexRequest(
-        repo_id="repo-java-spring-demo",
+        repo_id=_repo_id("repo-java-spring-demo", FIXTURE_ROOT),
         repo_uri=FIXTURE_ROOT.resolve().as_uri(),
         language_hint="java",
         parser_profile="spring-boot",
         contract_version="1.0.0",
     )
+
+
+def _repo_id(base_name: str, fixture_root: Path) -> str:
+    path_hash = sha256(str(fixture_root.resolve()).encode("utf-8")).hexdigest()[:8]
+    return f"{base_name}-{path_hash}"
 
 
 def _index_fixture(adapter: GitNexusCliCodeKnowledgeCoreAdapter):

@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from legacy_pilot.code_knowledge_core.errors import IndexingError, QueryError
+from legacy_pilot.code_knowledge_core.query_planner import plan_graph_query
 from legacy_pilot.contracts.models import GraphQuery, RepoIndexRequest
 
 
@@ -85,9 +86,13 @@ class GitNexusCliClient:
         return payload
 
     def query_graph(self, query: GraphQuery) -> dict[str, Any]:
-        uid = self._resolve_route_controller_uid(query)
-        if uid is None:
-            uid = self._resolve_symbol_uid(query)
+        plan = plan_graph_query(query)
+        if plan.kind in {"sql", "config", "exception"}:
+            return _not_found_query_payload(query.graph_id)
+        if plan.kind == "route_context":
+            uid = self._resolve_route_controller_uid(query)
+        else:
+            uid = self._resolve_symbol_uid(query, plan.term)
         if uid is None:
             return _not_found_query_payload(query.graph_id)
 

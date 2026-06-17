@@ -379,6 +379,28 @@ def test_query_graph_returns_not_found_when_symbol_lookup_is_empty():
     }
 
 
+def test_query_graph_returns_not_found_for_enriched_sql_lookup_until_local_index_handles_it():
+    runner = RecordingRunner()
+    client = GitNexusCliClient(runner=runner)
+
+    payload = client.query_graph(
+        graph_query(
+            query_terms=["dataset_version"],
+            node_filters=["Table"],
+            edge_filters=["READS_TABLE"],
+        )
+    )
+
+    assert runner.calls == []
+    assert payload == {
+        "graph_id": "GRAPH-GN",
+        "nodes": [],
+        "relationships": [],
+        "paths": [],
+        "not_found": True,
+    }
+
+
 def test_constructor_configuration_overrides_environment(monkeypatch):
     monkeypatch.setenv("GITNEXUS_BIN", "env-gitnexus")
     monkeypatch.setenv("GITNEXUS_TIMEOUT_SECONDS", "99")

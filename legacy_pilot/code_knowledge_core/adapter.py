@@ -25,6 +25,8 @@ from legacy_pilot.code_knowledge_core.gitnexus_mapper import (
     map_index_payload,
     map_query_payload,
 )
+from legacy_pilot.code_knowledge_core.local_graph_index import LocalGraphIndex
+from legacy_pilot.code_knowledge_core.query_planner import plan_graph_query
 from legacy_pilot.contracts.models import (
     Edge,
     EvidenceRef,
@@ -258,6 +260,7 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
             STRUCTURE1_ENRICHED_PARSER_VERSION if uses_default_index_enrichers else None
         )
         self._query_enrichers = query_enrichers or []
+        self._local_indexes: dict[tuple[str, str], LocalGraphIndex] = {}
 
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
         payload = self._client.index_repo(request)
@@ -271,16 +274,49 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
                 enrichment_sources=self._index_enrichment_sources,
                 parser_version=self._index_parser_version,
             )
+        self._local_indexes[
+            (request.repo_id, _payload_graph_id(payload, request.repo_id))
+        ] = LocalGraphIndex.from_payload(payload)
         return map_index_payload(payload, now=self._now)
 
     def query_graph(self, query: GraphQuery) -> GraphContext:
-        payload = self._client.query_graph(query)
-        if self._query_enrichers:
-            payload = merge_graph_payloads(
-                payload,
-                _run_query_enrichers(self._query_enrichers, query),
+        local_payload = self._query_local_index(query)
+        if local_payload is not None and local_payload.get("not_found") is not True:
+            return map_query_payload(
+                self._with_query_enrichers(local_payload, query),
+                query=query,
+                now=self._now,
             )
+
+        payload = self._client.query_graph(query)
+        payload = self._with_query_enrichers(payload, query)
         return map_query_payload(payload, query=query, now=self._now)
+
+    def _query_local_index(self, query: GraphQuery) -> dict[str, Any] | None:
+        plan = plan_graph_query(query)
+        if plan.kind not in {"sql", "config", "exception"}:
+            return None
+        index = self._local_indexes.get((query.repo_id, query.graph_id))
+        if index is None:
+            return None
+        return index.query(
+            term=plan.term,
+            node_filters=query.node_filters,
+            edge_filters=query.edge_filters,
+            max_depth=query.max_depth,
+        )
+
+    def _with_query_enrichers(
+        self,
+        payload: dict[str, Any],
+        query: GraphQuery,
+    ) -> dict[str, Any]:
+        if not self._query_enrichers:
+            return payload
+        return merge_graph_payloads(
+            payload,
+            _run_query_enrichers(self._query_enrichers, query),
+        )
 
 
 class UnsupportedCodeKnowledgeCoreBackendAdapter(CodeKnowledgeCoreAdapter):
@@ -339,6 +375,11 @@ def _with_enrichment_metadata(
         enriched["parser_version"] = parser_version
     enriched.setdefault("semantic_enrichment_version", None)
     return enriched
+
+
+def _payload_graph_id(payload: dict[str, Any], repo_id: str) -> str:
+    graph_id = payload.get("graph_id") or payload.get("graphId")
+    return str(graph_id) if graph_id else f"GRAPH-{repo_id}"
 
 
 def _run_index_enrichers(

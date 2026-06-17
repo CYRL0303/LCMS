@@ -1,4 +1,5 @@
 import os
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -6,13 +7,34 @@ import pytest
 from legacy_pilot.code_knowledge_core.adapter import GitNexusCliCodeKnowledgeCoreAdapter
 from legacy_pilot.code_knowledge_core.errors import CodeKnowledgeCoreError
 from legacy_pilot.code_knowledge_core.gitnexus_client import GitNexusCliClient
-from legacy_pilot.contracts.models import RepoIndexRequest
+from legacy_pilot.contracts.models import GraphQuery, RepoIndexRequest
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "java_spring_production_demo"
 JAVA_ROOT = FIXTURE_ROOT / "src" / "main" / "java" / "com" / "legacy"
 RUN_ENV = "LEGACY_PILOT_RUN_GITNEXUS_INTEGRATION"
 GITNEXUS_ENV_KEYS = ("GITNEXUS_BIN", "GITNEXUS_REPO_ROOT")
+CONTROLLER_ID = (
+    "Method:src/main/java/com/legacy/DatasetController.java:"
+    "DatasetController.getVersion#1"
+)
+SERVICE_ID = (
+    "Method:src/main/java/com/legacy/DatasetService.java:"
+    "DatasetService.getVersion#1"
+)
+MAPPER_ID = (
+    "Method:src/main/java/com/legacy/DatasetMapper.java:"
+    "DatasetMapper.selectVersionById#1"
+)
+SQL_ID = "MapperXml:src/main/resources/mapper/DatasetMapper.xml:selectVersionById"
+TABLE_ID = "Table:dataset_version"
+CONFIG_ID = (
+    "Config:src/main/resources/application.yml:legacy.dataset.cache-enabled"
+)
+EXCEPTION_ID = (
+    "Exception:src/main/java/com/legacy/DatasetNotFoundException.java:"
+    "DatasetNotFoundException"
+)
 
 
 def test_production_fixture_contains_structure1_inputs():
@@ -25,6 +47,76 @@ def test_production_fixture_contains_structure1_inputs():
         FIXTURE_ROOT / "src" / "main" / "resources" / "mapper" / "DatasetMapper.xml"
     ).exists()
     assert (FIXTURE_ROOT / "src" / "main" / "resources" / "application.yml").exists()
+
+
+def test_query_graph_returns_local_enriched_contexts_after_indexing_production_fixture():
+    client = FakeProductionGitNexusClient()
+    adapter = GitNexusCliCodeKnowledgeCoreAdapter(client=client)
+    request = _production_fixture_request()
+
+    adapter.index_repo(request)
+
+    table_context = adapter.query_graph(
+        GraphQuery(
+            repo_id=request.repo_id,
+            graph_id=f"GRAPH-{request.repo_id}",
+            query_terms=["dataset_version"],
+            node_filters=["Table"],
+            edge_filters=["READS_TABLE"],
+            max_depth=5,
+            trace_id="TRACE-TABLE",
+            contract_version="1.0.0",
+        )
+    )
+    config_context = adapter.query_graph(
+        GraphQuery(
+            repo_id=request.repo_id,
+            graph_id=f"GRAPH-{request.repo_id}",
+            query_terms=["legacy.dataset.cache-enabled"],
+            node_filters=["Config"],
+            edge_filters=[],
+            max_depth=3,
+            trace_id="TRACE-CONFIG",
+            contract_version="1.0.0",
+        )
+    )
+    exception_context = adapter.query_graph(
+        GraphQuery(
+            repo_id=request.repo_id,
+            graph_id=f"GRAPH-{request.repo_id}",
+            query_terms=["DatasetNotFoundException"],
+            node_filters=["Exception"],
+            edge_filters=[],
+            max_depth=5,
+            trace_id="TRACE-EXCEPTION",
+            contract_version="1.0.0",
+        )
+    )
+
+    assert client.query_called is False
+    assert {
+        (edge.source_node_id, edge.type, edge.target_node_id)
+        for edge in table_context.matched_edges
+    } == {
+        (CONTROLLER_ID, "CALLS", SERVICE_ID),
+        (SERVICE_ID, "CALLS", MAPPER_ID),
+        (MAPPER_ID, "EXECUTES_SQL", SQL_ID),
+        (SQL_ID, "READS_TABLE", TABLE_ID),
+    }
+    assert any(node.node_id == TABLE_ID for node in table_context.matched_nodes)
+    assert table_context.graph_paths
+
+    assert [node.node_id for node in config_context.matched_nodes] == [CONFIG_ID]
+    assert config_context.graph_paths
+    assert config_context.graph_paths[0][0].endswith("legacy.dataset.cache-enabled")
+
+    assert any(node.node_id == EXCEPTION_ID for node in exception_context.matched_nodes)
+    assert {
+        (edge.source_node_id, edge.type, edge.target_node_id)
+        for edge in exception_context.matched_edges
+    } >= {
+        (SERVICE_ID, "THROWS_EXCEPTION", EXCEPTION_ID),
+    }
 
 
 @pytest.mark.gitnexus_integration
@@ -63,40 +155,21 @@ def test_index_repo_includes_sql_config_and_exception_nodes():
         (edge.source_node_id, edge.type, edge.target_node_id): edge
         for edge in snapshot.edges
     }
-    controller_id = (
-        "Method:src/main/java/com/legacy/DatasetController.java:"
-        "DatasetController.getVersion#1"
-    )
-    service_id = (
-        "Method:src/main/java/com/legacy/DatasetService.java:"
-        "DatasetService.getVersion#1"
-    )
-    mapper_id = (
-        "Method:src/main/java/com/legacy/DatasetMapper.java:"
-        "DatasetMapper.selectVersionById#1"
-    )
-    sql_id = "MapperXml:src/main/resources/mapper/DatasetMapper.xml:selectVersionById"
-    table_id = "Table:dataset_version"
-    exception_id = (
-        "Exception:src/main/java/com/legacy/DatasetNotFoundException.java:"
-        "DatasetNotFoundException"
-    )
-
-    assert {controller_id, service_id, mapper_id, sql_id, table_id, exception_id}.issubset(
+    assert {CONTROLLER_ID, SERVICE_ID, MAPPER_ID, SQL_ID, TABLE_ID, EXCEPTION_ID}.issubset(
         node_ids
     )
-    assert (controller_id, "CALLS", service_id) in edge_pairs
-    assert (service_id, "CALLS", mapper_id) in edge_pairs
-    assert (mapper_id, "EXECUTES_SQL", sql_id) in edge_pairs
-    assert (sql_id, "READS_TABLE", table_id) in edge_pairs
-    assert (service_id, "THROWS_EXCEPTION", exception_id) in edge_pairs
+    assert (CONTROLLER_ID, "CALLS", SERVICE_ID) in edge_pairs
+    assert (SERVICE_ID, "CALLS", MAPPER_ID) in edge_pairs
+    assert (MAPPER_ID, "EXECUTES_SQL", SQL_ID) in edge_pairs
+    assert (SQL_ID, "READS_TABLE", TABLE_ID) in edge_pairs
+    assert (SERVICE_ID, "THROWS_EXCEPTION", EXCEPTION_ID) in edge_pairs
 
     expected_edge_source_types = {
-        (controller_id, "CALLS", service_id): {"code"},
-        (service_id, "CALLS", mapper_id): {"code"},
-        (mapper_id, "EXECUTES_SQL", sql_id): {"sql"},
-        (sql_id, "READS_TABLE", table_id): {"sql"},
-        (service_id, "THROWS_EXCEPTION", exception_id): {"code"},
+        (CONTROLLER_ID, "CALLS", SERVICE_ID): {"code"},
+        (SERVICE_ID, "CALLS", MAPPER_ID): {"code"},
+        (MAPPER_ID, "EXECUTES_SQL", SQL_ID): {"sql"},
+        (SQL_ID, "READS_TABLE", TABLE_ID): {"sql"},
+        (SERVICE_ID, "THROWS_EXCEPTION", EXCEPTION_ID): {"code"},
     }
     for edge_pair, expected_source_types in expected_edge_source_types.items():
         edge = edges_by_pair[edge_pair]
@@ -114,6 +187,87 @@ def _gitnexus_adapter_or_skip() -> GitNexusCliCodeKnowledgeCoreAdapter:
     return GitNexusCliCodeKnowledgeCoreAdapter(client=client)
 
 
+class FakeProductionGitNexusClient:
+    def __init__(self):
+        self.query_called = False
+
+    def index_repo(self, request: RepoIndexRequest) -> dict:
+        return {
+            "repo_id": request.repo_id,
+            "graph_id": f"GRAPH-{request.repo_id}",
+            "trace_id": f"TRACE-INDEX-{request.repo_id}",
+            "nodes": [
+                _method_node(
+                    CONTROLLER_ID,
+                    "getVersion",
+                    "src/main/java/com/legacy/DatasetController.java",
+                    "DatasetController.getVersion",
+                ),
+                _method_node(
+                    SERVICE_ID,
+                    "getVersion",
+                    "src/main/java/com/legacy/DatasetService.java",
+                    "DatasetService.getVersion",
+                ),
+                _method_node(
+                    MAPPER_ID,
+                    "selectVersionById",
+                    "src/main/java/com/legacy/DatasetMapper.java",
+                    "DatasetMapper.selectVersionById",
+                ),
+            ],
+            "relationships": [
+                _code_edge(CONTROLLER_ID, "CALLS", SERVICE_ID),
+                _code_edge(SERVICE_ID, "CALLS", MAPPER_ID),
+            ],
+        }
+
+    def query_graph(self, query: GraphQuery) -> dict:
+        self.query_called = True
+        return {
+            "graph_id": query.graph_id,
+            "nodes": [],
+            "relationships": [],
+            "paths": [],
+            "not_found": True,
+        }
+
+
+def _method_node(
+    node_id: str,
+    name: str,
+    file_path: str,
+    qualified_name: str,
+) -> dict:
+    return {
+        "id": node_id,
+        "type": "Method",
+        "name": name,
+        "filePath": file_path,
+        "startLine": 1,
+        "endLine": 10,
+        "source_type": "code",
+        "extraction_method": "java_parser",
+        "confidence": 0.9,
+        "properties": {"qualifiedName": qualified_name},
+    }
+
+
+def _code_edge(source_id: str, edge_type: str, target_id: str) -> dict:
+    return {
+        "id": f"{edge_type}:{source_id}->{target_id}",
+        "source_id": source_id,
+        "target_id": target_id,
+        "type": edge_type,
+        "filePath": "src/main/java/com/legacy/DatasetService.java",
+        "startLine": 1,
+        "endLine": 10,
+        "source_type": "code",
+        "extraction_method": "java_parser",
+        "confidence": 0.86,
+    }
+
+
 def _gitnexus_integration_skip_reason() -> str | None:
     missing_keys = [key for key in GITNEXUS_ENV_KEYS if not os.getenv(key)]
     if os.getenv(RUN_ENV) != "1":
@@ -127,14 +281,22 @@ def _gitnexus_integration_skip_reason() -> str | None:
 
 
 def _index_production_fixture(adapter: GitNexusCliCodeKnowledgeCoreAdapter):
-    request = RepoIndexRequest(
-        repo_id="repo-java-spring-production-demo",
+    return _call_gitnexus(lambda: adapter.index_repo(_production_fixture_request()))
+
+
+def _production_fixture_request() -> RepoIndexRequest:
+    return RepoIndexRequest(
+        repo_id=_repo_id("repo-java-spring-production-demo", FIXTURE_ROOT),
         repo_uri=FIXTURE_ROOT.resolve().as_uri(),
         language_hint="java",
         parser_profile="spring-boot",
         contract_version="1.0.0",
     )
-    return _call_gitnexus(lambda: adapter.index_repo(request))
+
+
+def _repo_id(base_name: str, fixture_root: Path) -> str:
+    path_hash = sha256(str(fixture_root.resolve()).encode("utf-8")).hexdigest()[:8]
+    return f"{base_name}-{path_hash}"
 
 
 def _call_gitnexus(operation):
