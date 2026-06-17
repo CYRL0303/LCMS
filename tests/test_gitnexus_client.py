@@ -270,6 +270,49 @@ def test_query_graph_route_term_falls_back_to_controller_method_context():
     assert payload["relationships"][0]["target_id"].endswith("DatasetService.getVersion#1")
 
 
+def test_query_graph_keeps_route_priority_when_query_terms_mix_symbol_and_route():
+    runner = RecordingRunner(
+        results=[
+            cypher_process(
+                "| n.id | n.name | n.filePath |\n"
+                "| --- | --- | --- |\n"
+                "| File:src/main/java/com/legacy/DatasetController.java | DatasetController.java | src/main/java/com/legacy/DatasetController.java |\n"
+            ),
+            cypher_process(
+                "| n.id | n.name | n.filePath | n.startLine | n.endLine |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| Method:src/main/java/com/legacy/DatasetController.java:DatasetController.getVersion#1 | getVersion | src/main/java/com/legacy/DatasetController.java | 14 | 16 |\n"
+            ),
+            completed_process(
+                {
+                    "status": "found",
+                    "symbol": {
+                        "uid": "Method:src/main/java/com/legacy/DatasetController.java:DatasetController.getVersion#1",
+                        "name": "getVersion",
+                        "kind": "Method",
+                        "filePath": "src/main/java/com/legacy/DatasetController.java",
+                        "startLine": 14,
+                    },
+                    "incoming": {"calls": []},
+                    "outgoing": {"calls": []},
+                }
+            ),
+        ]
+    )
+    client = GitNexusCliClient(gitnexus_bin="custom-gitnexus", runner=runner)
+
+    client.query_graph(
+        graph_query(
+            query_terms=["DatasetService.getVersion", "/api/dataset/version"],
+            node_filters=["Method"],
+        )
+    )
+
+    route_lookup = runner.calls[0][0][0]
+    assert "/api/dataset/version" in route_lookup[2]
+    assert "DatasetService.getVersion" not in route_lookup[2]
+
+
 @pytest.mark.parametrize(
     ("side_effect", "expected_message"),
     [
@@ -379,15 +422,28 @@ def test_query_graph_returns_not_found_when_symbol_lookup_is_empty():
     }
 
 
-def test_query_graph_returns_not_found_for_enriched_sql_lookup_until_local_index_handles_it():
+@pytest.mark.parametrize(
+    ("query_terms", "node_filters", "edge_filters"),
+    [
+        (["dataset_version"], ["Table"], ["READS_TABLE"]),
+        (["selectVersionById"], ["SQL"], ["EXECUTES_SQL"]),
+        (["legacy.dataset.cache-enabled"], ["Config"], []),
+        (["DatasetNotFoundException"], ["Exception"], []),
+    ],
+)
+def test_query_graph_returns_not_found_for_enriched_lookups_until_local_index_handles_them(
+    query_terms,
+    node_filters,
+    edge_filters,
+):
     runner = RecordingRunner()
     client = GitNexusCliClient(runner=runner)
 
     payload = client.query_graph(
         graph_query(
-            query_terms=["dataset_version"],
-            node_filters=["Table"],
-            edge_filters=["READS_TABLE"],
+            query_terms=query_terms,
+            node_filters=node_filters,
+            edge_filters=edge_filters,
         )
     )
 

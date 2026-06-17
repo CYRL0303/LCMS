@@ -38,6 +38,18 @@ def test_query_planner_routes_route_terms_to_route_context():
     assert plan.term == "/api/dataset/version"
 
 
+def test_query_planner_keeps_route_priority_across_mixed_terms():
+    plan = plan_graph_query(
+        graph_query(
+            query_terms=["DatasetService.getVersion", "/api/dataset/version"],
+            node_filters=["Method"],
+        )
+    )
+
+    assert plan.kind == "route_context"
+    assert plan.term == "/api/dataset/version"
+
+
 def test_query_planner_routes_dotted_terms_to_symbol_context():
     plan = plan_graph_query(graph_query(query_terms=["DatasetService.getVersion"]))
 

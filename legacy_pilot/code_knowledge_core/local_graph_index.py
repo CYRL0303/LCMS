@@ -64,10 +64,15 @@ class LocalGraphIndex:
             return self._not_found()
 
         paths = [
-            self._longest_incoming_path(seed["id"], max_depth=max_depth)
+            path
             for seed in seeds
+            for path in self._incoming_paths(seed["id"], max_depth=max_depth)
         ]
-        relationships = self._relationships_for_paths(paths)
+        paths = self._paths_matching_edge_filters(paths, edge_filters=edge_filters)
+        if not paths:
+            return self._not_found()
+
+        relationships = self._relationships_for_paths(paths, edge_filters=edge_filters)
         nodes = self._nodes_for_result(seeds=seeds, paths=paths)
 
         return {
@@ -109,30 +114,83 @@ class LocalGraphIndex:
             for edge in incident_edges
         )
 
-    def _longest_incoming_path(self, seed_id: str, *, max_depth: int) -> list[str]:
+    def _incoming_paths(self, seed_id: str, *, max_depth: int) -> list[list[str]]:
         max_nodes = max(1, max_depth)
+        paths: list[list[str]] = []
+        queue: list[list[str]] = [[seed_id]]
 
-        def walk(node_id: str, seen: set[str]) -> list[str]:
-            if len(seen) >= max_nodes:
-                return [node_id]
-            candidates: list[list[str]] = []
-            for edge in self._incoming_by_target.get(node_id, []):
+        while queue:
+            path = queue.pop(0)
+            current_id = path[0]
+            if len(path) >= max_nodes:
+                paths.append(path)
+                continue
+
+            incoming_edges = sorted(
+                self._incoming_by_target.get(current_id, []),
+                key=lambda edge: (
+                    _text(edge.get("source_id")),
+                    _text(edge.get("type")),
+                    _relationship_identity(edge),
+                ),
+            )
+            expanded = False
+            for edge in incoming_edges:
                 source_id = _text(edge.get("source_id"))
-                if not source_id or source_id in seen:
+                if not source_id or source_id in path:
                     continue
-                candidates.append(walk(source_id, seen | {source_id}) + [node_id])
-            if not candidates:
-                return [node_id]
-            return max(candidates, key=lambda path: (len(path), path))
+                queue.append([source_id, *path])
+                expanded = True
+            if not expanded:
+                paths.append(path)
 
-        return walk(seed_id, {seed_id})
+        return sorted(paths)
 
-    def _relationships_for_paths(self, paths: list[list[str]]) -> list[dict[str, Any]]:
+    def _paths_matching_edge_filters(
+        self,
+        paths: list[list[str]],
+        *,
+        edge_filters: list[str],
+    ) -> list[list[str]]:
+        normalized_edge_types = {_normalized(value) for value in edge_filters}
+        if not normalized_edge_types:
+            return paths
+        return [
+            path
+            for path in paths
+            if self._path_has_edge_type(path, normalized_edge_types)
+        ]
+
+    def _path_has_edge_type(
+        self,
+        path: list[str],
+        normalized_edge_types: set[str],
+    ) -> bool:
+        for source_id, target_id in zip(path, path[1:]):
+            for relationship in self._edge_by_pair.get((source_id, target_id), []):
+                if _normalized(_text(relationship.get("type"))) in normalized_edge_types:
+                    return True
+        return False
+
+    def _relationships_for_paths(
+        self,
+        paths: list[list[str]],
+        *,
+        edge_filters: list[str],
+    ) -> list[dict[str, Any]]:
+        normalized_edge_types = {_normalized(value) for value in edge_filters}
         relationships: list[dict[str, Any]] = []
         seen: set[str] = set()
         for path in paths:
             for source_id, target_id in zip(path, path[1:]):
-                for relationship in self._edge_by_pair.get((source_id, target_id), []):
+                pair_edges = self._edge_by_pair.get((source_id, target_id), [])
+                filtered_edges = [
+                    edge
+                    for edge in pair_edges
+                    if _normalized(_text(edge.get("type"))) in normalized_edge_types
+                ]
+                selected_edges = filtered_edges or pair_edges
+                for relationship in selected_edges:
                     relationship_id = _relationship_identity(relationship)
                     if relationship_id in seen:
                         continue

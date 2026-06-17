@@ -56,6 +56,33 @@ def test_query_graph_returns_local_enriched_contexts_after_indexing_production_f
 
     adapter.index_repo(request)
 
+    table_context, config_context, exception_context = _query_production_contexts(
+        adapter,
+        request,
+    )
+
+    assert client.query_called is False
+    _assert_production_query_contexts(table_context, config_context, exception_context)
+
+
+@pytest.mark.gitnexus_integration
+def test_real_gitnexus_index_supports_local_enriched_production_queries():
+    adapter = _gitnexus_adapter_or_skip()
+    request = _production_fixture_request()
+
+    _call_gitnexus(lambda: adapter.index_repo(request))
+
+    table_context, config_context, exception_context = _call_gitnexus(
+        lambda: _query_production_contexts(adapter, request)
+    )
+
+    _assert_production_query_contexts(table_context, config_context, exception_context)
+
+
+def _query_production_contexts(
+    adapter: GitNexusCliCodeKnowledgeCoreAdapter,
+    request: RepoIndexRequest,
+):
     table_context = adapter.query_graph(
         GraphQuery(
             repo_id=request.repo_id,
@@ -92,12 +119,18 @@ def test_query_graph_returns_local_enriched_contexts_after_indexing_production_f
             contract_version="1.0.0",
         )
     )
+    return table_context, config_context, exception_context
 
-    assert client.query_called is False
+
+def _assert_production_query_contexts(
+    table_context,
+    config_context,
+    exception_context,
+) -> None:
     assert {
         (edge.source_node_id, edge.type, edge.target_node_id)
         for edge in table_context.matched_edges
-    } == {
+    } >= {
         (CONTROLLER_ID, "CALLS", SERVICE_ID),
         (SERVICE_ID, "CALLS", MAPPER_ID),
         (MAPPER_ID, "EXECUTES_SQL", SQL_ID),

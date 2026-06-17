@@ -22,12 +22,14 @@ class GraphQueryPlan:
 
 
 def plan_graph_query(query: GraphQuery) -> GraphQueryPlan:
+    route_term = _first_route_query_term(query)
+    if route_term is not None:
+        return GraphQueryPlan(kind="route_context", term=route_term)
+
     term = _first_query_term(query)
     node_filters = {_normalized_filter(value) for value in query.node_filters}
     edge_filters = {_normalized_filter(value) for value in query.edge_filters}
 
-    if term.startswith("/"):
-        return GraphQueryPlan(kind="route_context", term=term)
     if {"table", "sql"} & node_filters:
         return GraphQueryPlan(kind="sql", term=term)
     if "config" in node_filters:
@@ -47,6 +49,14 @@ def _first_query_term(query: GraphQuery) -> str:
         if stripped:
             return stripped
     return ""
+
+
+def _first_route_query_term(query: GraphQuery) -> str | None:
+    for term in query.query_terms:
+        stripped = term.strip()
+        if stripped.startswith("/"):
+            return stripped
+    return None
 
 
 def _normalized_filter(value: str) -> str:
