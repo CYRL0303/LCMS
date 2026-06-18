@@ -10,14 +10,24 @@ from legacy_pilot.code_knowledge_core.errors import (
     IndexingError,
     QueryError,
 )
+from legacy_pilot.code_knowledge_core.semantic import (
+    DisabledSemanticEnricher,
+    MockSemanticEnricher,
+    SemanticEnricher,
+    create_semantic_enricher,
+)
 
 __all__ = [
     "CodeKnowledgeCoreAdapter",
     "CodeKnowledgeCoreError",
+    "DisabledSemanticEnricher",
     "GitNexusCliCodeKnowledgeCoreAdapter",
     "IndexingError",
+    "MockSemanticEnricher",
     "MockCodeKnowledgeCoreAdapter",
     "QueryError",
+    "SemanticEnricher",
     "UnsupportedCodeKnowledgeCoreBackendAdapter",
     "create_code_knowledge_core_adapter",
+    "create_semantic_enricher",
 ]

@@ -464,6 +464,106 @@ class TestGitNexusCliAdapter:
         }
 
 
+def test_gitnexus_adapter_does_not_add_semantic_nodes_by_default(monkeypatch):
+    monkeypatch.delenv("LEGACY_PILOT_SEMANTIC_BACKEND", raising=False)
+    adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+        client=FakeGitNexusClient(),
+        index_enrichers=[],
+        now=lambda: datetime(2026, 6, 18, tzinfo=UTC),
+    )
+    request = RepoIndexRequest(
+        repo_id="repo-real",
+        repo_uri="file:///repo-real",
+        language_hint="java",
+        parser_profile="spring-boot",
+        contract_version="1.0.0",
+    )
+
+    snapshot = adapter.index_repo(request)
+
+    assert "Function Semantic Summary" not in {node.type for node in snapshot.nodes}
+    assert "HAS_SEMANTIC_ACTION" not in {edge.type for edge in snapshot.edges}
+    assert snapshot.semantic_enrichment_version is None
+
+
+def test_gitnexus_adapter_adds_mock_semantic_nodes_when_enabled():
+    from legacy_pilot.code_knowledge_core.semantic import MockSemanticEnricher
+
+    adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+        client=FakeGitNexusClient(),
+        index_enrichers=[],
+        semantic_enricher=MockSemanticEnricher(confidence_cap=0.42),
+        now=lambda: datetime(2026, 6, 18, tzinfo=UTC),
+    )
+    request = RepoIndexRequest(
+        repo_id="repo-real",
+        repo_uri="file:///repo-real",
+        language_hint="java",
+        parser_profile="spring-boot",
+        contract_version="1.0.0",
+    )
+
+    snapshot = adapter.index_repo(request)
+
+    node_types = {node.type for node in snapshot.nodes}
+    edge_types = {edge.type for edge in snapshot.edges}
+    semantic_evidence = [
+        evidence
+        for evidence in snapshot.evidence_refs
+        if evidence.source_type == "llm_semantic_summary"
+    ]
+
+    assert "Function Semantic Summary" in node_types
+    assert "HAS_SEMANTIC_ACTION" in edge_types
+    assert snapshot.semantic_enrichment_version == "semantic_mock_v1"
+    assert snapshot.metadata["semantic_enrichment"] == {
+        "backend": "mock",
+        "version": "semantic_mock_v1",
+        "verification_status": "pending",
+        "confidence_cap": 0.42,
+    }
+    assert semantic_evidence
+    assert all(evidence.extraction_method == "llm" for evidence in semantic_evidence)
+    assert all(evidence.confidence <= 0.42 for evidence in semantic_evidence)
+
+
+def test_gitnexus_adapter_wraps_semantic_failures_as_indexing_error():
+    class RaisingSemanticEnricher:
+        semantic_enrichment_version = "semantic_raising_v1"
+        backend_name = "raising"
+        confidence_cap = 0.7
+
+        def enrich(self, nodes: list[dict]) -> dict:
+            raise RuntimeError("semantic backend failed")
+
+    adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+        client=FakeGitNexusClient(),
+        index_enrichers=[],
+        semantic_enricher=RaisingSemanticEnricher(),
+        now=lambda: datetime(2026, 6, 18, tzinfo=UTC),
+    )
+    request = RepoIndexRequest(
+        repo_id="repo-real",
+        repo_uri="file:///repo-real",
+        language_hint="java",
+        parser_profile="spring-boot",
+        contract_version="1.0.0",
+    )
+
+    with pytest.raises(IndexingError) as excinfo:
+        adapter.index_repo(request)
+
+    assert (
+        excinfo.value.message
+        == "Structure 1 semantic enrichment failed while indexing repo."
+    )
+    assert excinfo.value.recoverable is True
+    assert excinfo.value.diagnostics == {
+        "semantic_backend": "raising",
+        "error_type": "RuntimeError",
+    }
+
+
 class TestBackendFactory:
     def test_missing_backend_selects_mock_adapter(self, monkeypatch):
         monkeypatch.delenv("LEGACY_PILOT_CODE_CORE_BACKEND", raising=False)

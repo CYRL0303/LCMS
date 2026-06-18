@@ -27,6 +27,11 @@ from legacy_pilot.code_knowledge_core.gitnexus_mapper import (
 )
 from legacy_pilot.code_knowledge_core.local_graph_index import LocalGraphIndex
 from legacy_pilot.code_knowledge_core.query_planner import plan_graph_query
+from legacy_pilot.code_knowledge_core.semantic import (
+    DisabledSemanticEnricher,
+    SemanticEnricher,
+    create_semantic_enricher,
+)
 from legacy_pilot.contracts.models import (
     Edge,
     EvidenceRef,
@@ -242,6 +247,7 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
             Callable[[RepoIndexRequest], dict[str, Any]]
         ] | None = None,
         query_enrichers: list[Callable[[GraphQuery], dict[str, Any]]] | None = None,
+        semantic_enricher: SemanticEnricher | None = None,
     ):
         self._client = client or GitNexusCliClient()
         self._now = now or (lambda: datetime.now(UTC))
@@ -260,6 +266,7 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
             STRUCTURE1_ENRICHED_PARSER_VERSION if uses_default_index_enrichers else None
         )
         self._query_enrichers = query_enrichers or []
+        self._semantic_enricher = semantic_enricher or create_semantic_enricher()
         self._local_indexes: dict[tuple[str, str], LocalGraphIndex] = {}
 
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
@@ -274,6 +281,7 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
                 enrichment_sources=self._index_enrichment_sources,
                 parser_version=self._index_parser_version,
             )
+        payload = _with_semantic_enrichment(payload, self._semantic_enricher)
         self._local_indexes[
             (request.repo_id, _payload_graph_id(payload, request.repo_id))
         ] = LocalGraphIndex.from_payload(payload)
@@ -374,6 +382,53 @@ def _with_enrichment_metadata(
     if parser_version is not None:
         enriched["parser_version"] = parser_version
     enriched.setdefault("semantic_enrichment_version", None)
+    return enriched
+
+
+def _with_semantic_enrichment(
+    payload: dict[str, Any],
+    semantic_enricher: SemanticEnricher,
+) -> dict[str, Any]:
+    if isinstance(semantic_enricher, DisabledSemanticEnricher):
+        enriched = dict(payload)
+        enriched.setdefault("semantic_enrichment_version", None)
+        return enriched
+    try:
+        semantic_payload = semantic_enricher.enrich(
+            [node for node in payload.get("nodes", []) if isinstance(node, dict)]
+        )
+    except CodeKnowledgeCoreError:
+        raise
+    except Exception as exc:
+        raise IndexingError(
+            "Structure 1 semantic enrichment failed while indexing repo.",
+            recoverable=True,
+            diagnostics={
+                "semantic_backend": getattr(
+                    semantic_enricher,
+                    "backend_name",
+                    semantic_enricher.__class__.__name__,
+                ),
+                "error_type": exc.__class__.__name__,
+            },
+        ) from exc
+
+    enriched = merge_graph_payloads(payload, [semantic_payload])
+    version = getattr(semantic_enricher, "semantic_enrichment_version", None)
+    enriched["semantic_enrichment_version"] = version
+    metadata = enriched.get("metadata")
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    metadata["semantic_enrichment"] = {
+        "backend": getattr(
+            semantic_enricher,
+            "backend_name",
+            semantic_enricher.__class__.__name__,
+        ),
+        "version": version,
+        "verification_status": "pending",
+        "confidence_cap": getattr(semantic_enricher, "confidence_cap", None),
+    }
+    enriched["metadata"] = metadata
     return enriched
 
 
