@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 
@@ -63,6 +64,58 @@ def test_query_graph_returns_local_enriched_contexts_after_indexing_production_f
 
     assert client.query_called is False
     _assert_production_query_contexts(table_context, config_context, exception_context)
+
+
+def test_production_fixture_has_no_semantic_nodes_by_default():
+    adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+        client=FakeProductionGitNexusClient(),
+        now=lambda: datetime(2026, 6, 18, tzinfo=UTC),
+    )
+    snapshot = adapter.index_repo(_production_fixture_request())
+
+    assert "Function Semantic Summary" not in {node.type for node in snapshot.nodes}
+    assert "HAS_SEMANTIC_ACTION" not in {edge.type for edge in snapshot.edges}
+    assert snapshot.semantic_enrichment_version is None
+
+
+def test_production_fixture_has_mock_semantic_nodes_when_explicitly_enabled():
+    from legacy_pilot.code_knowledge_core.semantic import MockSemanticEnricher
+
+    adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+        client=FakeProductionGitNexusClient(),
+        semantic_enricher=MockSemanticEnricher(confidence_cap=0.55),
+        now=lambda: datetime(2026, 6, 18, tzinfo=UTC),
+    )
+    snapshot = adapter.index_repo(_production_fixture_request())
+
+    semantic_nodes = [
+        node for node in snapshot.nodes if node.type == "Function Semantic Summary"
+    ]
+    semantic_edges = [
+        edge for edge in snapshot.edges if edge.type == "HAS_SEMANTIC_ACTION"
+    ]
+    semantic_evidence = [
+        evidence
+        for evidence in snapshot.evidence_refs
+        if evidence.source_type == "llm_semantic_summary"
+    ]
+
+    assert semantic_nodes
+    assert semantic_edges
+    assert snapshot.semantic_enrichment_version == "semantic_mock_v1"
+    assert snapshot.metadata["semantic_enrichment"] == {
+        "backend": "mock",
+        "version": "semantic_mock_v1",
+        "verification_status": "pending",
+        "confidence_cap": 0.55,
+    }
+    assert all(
+        node.metadata["gitnexus"]["properties"]["verification_status"] == "pending"
+        for node in semantic_nodes
+    )
+    assert semantic_evidence
+    assert all(evidence.extraction_method == "llm" for evidence in semantic_evidence)
+    assert all(evidence.confidence <= 0.55 for evidence in semantic_evidence)
 
 
 @pytest.mark.gitnexus_integration
