@@ -20,6 +20,33 @@ SubmitAlert
 -> SaveIncident
 ```
 
+## Current Progress
+
+Structure 1 is implemented through Milestone4 while preserving the middleware
+contract boundary:
+
+- Milestone0-2: real `gitnexus_cli` indexing/query integration plus Structure 1
+  enrichment for MyBatis SQL, tables, Java config, and Java exceptions.
+- Milestone3: query planner and local enriched graph index for endpoint,
+  method/symbol, table, config, and exception contexts.
+- Milestone4: semantic graph enrichment is disabled by default, has a
+  deterministic mock backend, and supports opt-in DashScope Qwen API semantic
+  summaries through `qwen_api`.
+- Production fixture coverage proves `/api/dataset/version -> controller ->
+  service -> mapper -> Mapper XML SQL -> dataset_version`, plus config and
+  exception evidence.
+- Middleware/router and the four-structure contract models were not changed for
+  Milestone0-4 beyond backward-compatible Structure 1 metadata fields already
+  present on `GraphSnapshot`.
+
+Latest local verification:
+
+```text
+Default suite: 129 passed, 6 skipped
+Real GitNexus opt-in suite: 11 passed
+Real Qwen semantic opt-in test: 1 passed
+```
+
 ## Repository Layout
 
 ```text
@@ -153,7 +180,7 @@ http://127.0.0.1:8000/health
 
 - Real Structure 1 execution is available only through the opt-in `gitnexus_cli` backend.
 - `gitnexus_http` is not implemented.
-- MyBatis XML and SQL table extraction are phase 2 scope.
 - Real Qwen semantic enrichment is available only through the opt-in `qwen_api` backend.
+- Semantic graph output is pending and confidence-capped; it is not treated as a trusted structural fact.
 - No persistent incident database is connected yet.
-- Router outputs are deterministic mock responses used to validate the middleware contract and MVP flow.
+- Structures 2-4 still use deterministic mock responses used to validate the middleware contract and MVP flow.
