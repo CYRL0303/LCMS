@@ -5,6 +5,16 @@ from legacy_pilot.code_knowledge_core.semantic import (
 )
 
 
+METHOD_ID = (
+    "Method:src/main/java/com/legacy/DatasetService.java:"
+    "DatasetService.getVersion#1"
+)
+SEMANTIC_ID = f"SemanticSummary:{METHOD_ID}"
+SEMANTIC_RELATIONSHIP_ID = f"SEM-REL-{METHOD_ID}"
+FILE_PATH = "src/main/java/com/legacy/DatasetService.java"
+SUMMARY = "Mock semantic summary for DatasetService.getVersion."
+
+
 def test_semantic_enrichment_is_disabled_by_default(monkeypatch):
     monkeypatch.delenv("LEGACY_PILOT_SEMANTIC_BACKEND", raising=False)
 
@@ -24,19 +34,19 @@ def test_mock_semantic_enricher_creates_pending_summary_node(monkeypatch):
 
     assert payload["nodes"] == [
         {
-            "id": "SemanticSummary:Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1",
+            "id": SEMANTIC_ID,
             "type": "Function Semantic Summary",
             "name": "DatasetService.getVersion semantic summary",
-            "filePath": "src/main/java/com/legacy/DatasetService.java",
+            "filePath": FILE_PATH,
             "startLine": 12,
             "endLine": 18,
-            "excerpt": "Mock semantic summary for DatasetService.getVersion.",
+            "excerpt": SUMMARY,
             "source_type": "llm_semantic_summary",
             "extraction_method": "llm",
             "confidence": 0.42,
             "properties": {
-                "source_node_id": "Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1",
-                "summary": "Mock semantic summary for DatasetService.getVersion.",
+                "source_node_id": METHOD_ID,
+                "summary": SUMMARY,
                 "evidence_span": "DatasetService.getVersion",
                 "prompt_version": "mock_semantic_v1",
                 "verification_status": "pending",
@@ -45,14 +55,14 @@ def test_mock_semantic_enricher_creates_pending_summary_node(monkeypatch):
     ]
     assert payload["relationships"] == [
         {
-            "id": "SEM-REL-Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1",
-            "source_id": "Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1",
-            "target_id": "SemanticSummary:Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1",
+            "id": SEMANTIC_RELATIONSHIP_ID,
+            "source_id": METHOD_ID,
+            "target_id": SEMANTIC_ID,
             "type": "HAS_SEMANTIC_ACTION",
-            "filePath": "src/main/java/com/legacy/DatasetService.java",
+            "filePath": FILE_PATH,
             "startLine": 12,
             "endLine": 18,
-            "excerpt": "Mock semantic summary for DatasetService.getVersion.",
+            "excerpt": SUMMARY,
             "source_type": "llm_semantic_summary",
             "extraction_method": "llm",
             "confidence": 0.42,
@@ -82,10 +92,10 @@ def test_mock_semantic_enricher_skips_nodes_without_file_evidence():
 
 def _method_node():
     return {
-        "id": "Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1",
+        "id": METHOD_ID,
         "type": "Method",
         "name": "DatasetService.getVersion",
-        "filePath": "src/main/java/com/legacy/DatasetService.java",
+        "filePath": FILE_PATH,
         "startLine": 12,
         "endLine": 18,
         "excerpt": "return datasetMapper.selectVersionById(datasetId);",
