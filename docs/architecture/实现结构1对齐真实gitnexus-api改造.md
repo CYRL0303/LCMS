@@ -64,7 +64,7 @@ DatasetController.getVersion
 -> DatasetMapper.selectVersionById
 ```
 
-它用于验证结构 1 最小 Java/Spring 闭环，不包含 MyBatis XML 或 SQL table。
+早期 java_spring_demo 用于验证结构 1 最小 Java/Spring 闭环；当前 java_spring_production_demo 已覆盖 MyBatis XML、SQL table、config 和 exception。
 
 4. 增加 opt-in 真实集成测试。
 
@@ -455,8 +455,8 @@ TypeScript thin bridge
 GitNexus query 命令作为主查询路径
 GitNexus trace 命令接入 GraphQuery from/to 查询
 GitNexus impact 命令接入 upstream/downstream 影响面
-MyBatis XML
-SQL table / SQL statement graph
+复杂 MyBatis XML / 动态 SQL
+跨模块 SQL table / SQL statement graph
 多模块 Spring Boot 项目
 复杂 route annotation 组合
 大仓库性能和分页
@@ -624,7 +624,7 @@ adapter 可以把 query 作为可选发现/排序输入，不能把 query 输出
 真实 gitnexus_cli 对接：完成。
 Java/Spring 最小验收链路：完成。
 完整 GitNexus 全 API 封装：未完成，也不是当前结构 1 首版目标。
-完整生产级 Java/Spring 覆盖：未完成，需要后续扩展 trace/impact/MyBatis/SQL/多模块场景。
+完整生产级 Java/Spring 覆盖：最小闭环已完成，已覆盖 endpoint/controller/service/mapper/MyBatis SQL/table/config/exception；后续仍需扩展 trace/impact/复杂 SQL/多模块场景。
 ```
 
 ## 后续建议
@@ -633,6 +633,6 @@ Java/Spring 最小验收链路：完成。
 
 1. 接入 `gitnexus trace`，让 `GraphQuery` 支持明确 from/to UID 的路径查询。
 2. 接入 `gitnexus impact`，支持 upstream/downstream 影响面。
-3. 扩展 fixture 到 MyBatis XML 和 SQL table。
+3. 在现有 MyBatis XML 和 SQL table fixture 基础上扩展复杂 SQL、多模块和 trace/impact 场景。
 4. 给真实 GitNexus 集成测试增加 CI profile，但仍保持默认单元测试不依赖 GitNexus。
 5. 如果 CLI markdown table 契约不稳定，再增加 TypeScript thin bridge 输出稳定 JSON。

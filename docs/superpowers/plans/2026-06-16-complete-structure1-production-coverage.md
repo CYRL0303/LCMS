@@ -1011,9 +1011,13 @@ class MockSemanticEnricher:
 Environment:
 
 ```text
-LEGACY_PILOT_SEMANTIC_BACKEND=disabled|mock|ollama|qwen_api
+LEGACY_PILOT_SEMANTIC_BACKEND=disabled|mock|qwen_api
 LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP=0.7
 ```
+
+`qwen_api` is the real LLM backend for this milestone. `ollama` is reserved for
+future local-model experiments and is not part of the Structure 1 production
+coverage acceptance path.
 
 - [ ] **Step 4: Enforce semantic safety**
 

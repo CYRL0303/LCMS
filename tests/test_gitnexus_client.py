@@ -1,11 +1,15 @@
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from legacy_pilot.code_knowledge_core.errors import CodeKnowledgeCoreError
 from legacy_pilot.code_knowledge_core.gitnexus_client import GitNexusCliClient
 from legacy_pilot.contracts.models import GraphQuery, RepoIndexRequest
+
+
+FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "java_spring_demo"
 
 
 class RecordingRunner:
@@ -32,7 +36,7 @@ class RecordingRunner:
 def repo_index_request(**overrides):
     values = {
         "repo_id": "repo-demo",
-        "repo_uri": "file:///workspace/legacy-demo",
+        "repo_uri": FIXTURE_ROOT.resolve().as_uri(),
         "language_hint": "java",
         "parser_profile": "spring-boot",
         "contract_version": "1.0.0",
@@ -98,7 +102,7 @@ def test_index_command_uses_real_gitnexus_analyze_shape(monkeypatch):
     args, kwargs = runner.calls[0]
     command = args[0]
     assert command[:2] == ["env-gitnexus", "analyze"]
-    assert "/workspace/legacy-demo" in command
+    assert Path(command[2]) == FIXTURE_ROOT.resolve()
     assert "--skip-git" in command
     assert "--index-only" in command
     assert "--name" in command
@@ -127,7 +131,7 @@ def test_index_repo_runs_analyze_then_cypher_and_normalizes_graph():
     assert runner.calls[1][0][0][:2] == ["custom-gitnexus", "cypher"]
     assert payload["repo_id"] == "repo-demo"
     assert payload["graph_id"] == "GRAPH-repo-demo"
-    assert payload["repo_path"] == "/workspace/legacy-demo"
+    assert Path(payload["repo_path"]) == FIXTURE_ROOT.resolve()
     assert payload["parser_version"] == "gitnexus_cli+cypher_v1"
     assert payload["nodes"][0]["id"].startswith("Method:")
     assert payload["relationships"][0]["type"] == "CALLS"
@@ -363,6 +367,35 @@ def test_non_zero_exit_becomes_recoverable_error_without_leaking_stderr_text():
     assert error.diagnostics["returncode"] == "17"
 
 
+def test_index_repo_rejects_non_local_repo_uri_before_analyze():
+    runner = RecordingRunner()
+    client = GitNexusCliClient(runner=runner)
+
+    with pytest.raises(CodeKnowledgeCoreError) as excinfo:
+        client.index_repo(repo_index_request(repo_uri="https://example.com/repo.git"))
+
+    error = excinfo.value
+    assert error.message == "repo_uri must resolve to a local filesystem path."
+    assert error.recoverable is True
+    assert error.diagnostics["repo_uri"] == "https://example.com/repo.git"
+    assert runner.calls == []
+
+
+def test_index_repo_rejects_missing_repo_path_before_analyze(tmp_path):
+    missing_repo = tmp_path / "missing-repo"
+    runner = RecordingRunner()
+    client = GitNexusCliClient(runner=runner)
+
+    with pytest.raises(CodeKnowledgeCoreError) as excinfo:
+        client.index_repo(repo_index_request(repo_uri=missing_repo.as_uri()))
+
+    error = excinfo.value
+    assert error.message == "repo_uri path must exist before GitNexus analyze."
+    assert error.recoverable is True
+    assert Path(error.diagnostics["repo_path"]) == missing_repo
+    assert runner.calls == []
+
+
 def test_invalid_json_stdout_becomes_recoverable_error():
     runner = RecordingRunner(
         subprocess.CompletedProcess(
@@ -405,6 +438,148 @@ def test_valid_cypher_markdown_is_normalized_into_mapper_ready_index_payload():
     assert payload["nodes"][0]["id"].endswith("DatasetService.getVersion#1")
     assert payload["relationships"][0]["type"] == "CALLS"
     assert client.last_diagnostics["stderr"] == "index diagnostic"
+
+
+def test_cypher_process_edges_synthesize_route_to_controller_endpoint_edge():
+    runner = RecordingRunner(
+        results=[
+            text_process("Repository indexed successfully\n"),
+            cypher_process(
+                "| n.id | r.type | r.confidence | r.reason | m.id |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| Route:/api/dataset/version | ENTRY_POINT_OF | 0.85 | route-entry | proc_0_getversion |\n"
+                "| Method:src/main/java/com/legacy/DatasetController.java:DatasetController.getVersion#1 | STEP_IN_PROCESS | 1 | trace-detection | proc_0_getversion |\n"
+            ),
+        ]
+    )
+    client = GitNexusCliClient(runner=runner)
+
+    payload = client.index_repo(repo_index_request())
+
+    nodes_by_id = {node["id"]: node for node in payload["nodes"]}
+    edge_pairs = {
+        (edge["source_id"], edge["type"], edge["target_id"])
+        for edge in payload["relationships"]
+    }
+    assert nodes_by_id["Route:/api/dataset/version"]["type"] == "API Endpoint"
+    assert (
+        "Route:/api/dataset/version",
+        "MAPS_TO_ENDPOINT",
+        "Method:src/main/java/com/legacy/DatasetController.java:DatasetController.getVersion#1",
+    ) in edge_pairs
+
+
+def test_index_payload_respects_node_and_edge_limits():
+    runner = RecordingRunner(
+        results=[
+            text_process("Repository indexed successfully\n"),
+            cypher_process(
+                "| n.id | r.type | r.confidence | r.reason | m.id |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| Method:src/A.java:A.one#1 | CALLS | 0.9 | call | Method:src/B.java:B.two#1 |\n"
+                "| Method:src/B.java:B.two#1 | CALLS | 0.8 | call | Method:src/C.java:C.three#1 |\n"
+                "| Method:src/C.java:C.three#1 | CALLS | 0.7 | call | Method:src/D.java:D.four#1 |\n"
+            ),
+        ]
+    )
+    client = GitNexusCliClient(max_graph_nodes=2, max_graph_edges=1, runner=runner)
+
+    payload = client.index_repo(repo_index_request())
+
+    assert len(payload["nodes"]) <= 2
+    assert len(payload["relationships"]) <= 1
+
+
+def test_stable_index_mode_reuses_existing_graph_without_analyze(monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_GITNEXUS_FORCE_ANALYZE", "0")
+    runner = RecordingRunner(
+        cypher_process(
+            "| n.id | r.type | r.confidence | r.reason | m.id |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| Method:src/A.java:A.one#1 | CALLS | 0.9 | call | Method:src/B.java:B.two#1 |\n"
+        )
+    )
+    client = GitNexusCliClient(gitnexus_bin="custom-gitnexus", runner=runner)
+
+    payload = client.index_repo(repo_index_request())
+
+    assert [call[0][0][1] for call in runner.calls] == ["cypher"]
+    assert payload["relationships"]
+
+
+def test_stable_index_mode_analyzes_and_retries_when_existing_graph_is_empty(
+    monkeypatch,
+):
+    monkeypatch.setenv("LEGACY_PILOT_GITNEXUS_FORCE_ANALYZE", "0")
+    runner = RecordingRunner(
+        results=[
+            cypher_process("| n.id | r.type | r.confidence | r.reason | m.id |\n| --- | --- | --- | --- | --- |\n"),
+            text_process("Repository indexed successfully\n"),
+            cypher_process(
+                "| n.id | r.type | r.confidence | r.reason | m.id |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| Method:src/A.java:A.one#1 | CALLS | 0.9 | call | Method:src/B.java:B.two#1 |\n"
+            ),
+        ]
+    )
+    client = GitNexusCliClient(gitnexus_bin="custom-gitnexus", runner=runner)
+
+    payload = client.index_repo(repo_index_request())
+
+    assert [call[0][0][1] for call in runner.calls] == ["cypher", "analyze", "cypher"]
+    assert payload["relationships"]
+
+
+def test_index_uses_index_timeout_for_analyze_and_query_timeout_for_cypher(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITNEXUS_TIMEOUT_SECONDS", "99")
+    monkeypatch.setenv("GITNEXUS_INDEX_TIMEOUT_SECONDS", "120")
+    monkeypatch.setenv("GITNEXUS_QUERY_TIMEOUT_SECONDS", "30")
+    runner = RecordingRunner(
+        results=[
+            text_process("Repository indexed successfully\n"),
+            cypher_process("| n.id | r.type | r.confidence | r.reason | m.id |\n| --- | --- | --- | --- | --- |\n"),
+        ]
+    )
+    client = GitNexusCliClient(runner=runner)
+
+    client.index_repo(repo_index_request())
+
+    assert [call[1]["timeout"] for call in runner.calls] == [120.0, 30.0]
+
+
+def test_query_uses_query_timeout_for_cypher_lookup_and_context(monkeypatch):
+    monkeypatch.setenv("GITNEXUS_TIMEOUT_SECONDS", "99")
+    monkeypatch.setenv("GITNEXUS_INDEX_TIMEOUT_SECONDS", "120")
+    monkeypatch.setenv("GITNEXUS_QUERY_TIMEOUT_SECONDS", "30")
+    runner = RecordingRunner(
+        results=[
+            cypher_process(
+                "| n.id | n.name | n.filePath | n.startLine | n.endLine |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1 | getVersion | src/main/java/com/legacy/DatasetService.java | 12 | 17 |\n"
+            ),
+            completed_process(
+                {
+                    "status": "found",
+                    "symbol": {
+                        "uid": "Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1",
+                        "name": "getVersion",
+                        "kind": "Method",
+                        "filePath": "src/main/java/com/legacy/DatasetService.java",
+                    },
+                    "incoming": {"calls": []},
+                    "outgoing": {"calls": []},
+                }
+            ),
+        ]
+    )
+    client = GitNexusCliClient(runner=runner)
+
+    client.query_graph(graph_query(query_terms=["DatasetService.getVersion"]))
+
+    assert [call[1]["timeout"] for call in runner.calls] == [30.0, 30.0]
 
 
 def test_query_graph_returns_not_found_when_symbol_lookup_is_empty():

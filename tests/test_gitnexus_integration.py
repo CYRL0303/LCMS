@@ -51,6 +51,7 @@ def test_gitnexus_integration_skip_reason_is_clear_when_env_absent(monkeypatch):
 
 
 @pytest.mark.gitnexus_integration
+@pytest.mark.slow
 def test_index_repo_against_java_spring_fixture_returns_graph_snapshot():
     adapter = _gitnexus_adapter_or_skip()
     request = _repo_index_request()
@@ -63,6 +64,7 @@ def test_index_repo_against_java_spring_fixture_returns_graph_snapshot():
 
 
 @pytest.mark.gitnexus_integration
+@pytest.mark.slow
 def test_query_graph_by_service_method_returns_traceable_graph_context():
     adapter = _gitnexus_adapter_or_skip()
     snapshot = _index_fixture(adapter)
@@ -84,6 +86,7 @@ def test_query_graph_by_service_method_returns_traceable_graph_context():
 
 
 @pytest.mark.gitnexus_integration
+@pytest.mark.slow
 def test_query_graph_by_route_returns_route_or_controller_context_when_available():
     adapter = _gitnexus_adapter_or_skip()
     snapshot = _index_fixture(adapter)

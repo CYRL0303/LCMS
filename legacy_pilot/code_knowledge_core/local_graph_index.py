@@ -66,7 +66,7 @@ class LocalGraphIndex:
         paths = [
             path
             for seed in seeds
-            for path in self._incoming_paths(seed["id"], max_depth=max_depth)
+            for path in self._context_paths(seed["id"], max_depth=max_depth)
         ]
         paths = self._paths_matching_edge_filters(paths, edge_filters=edge_filters)
         if not paths:
@@ -143,6 +143,56 @@ class LocalGraphIndex:
                 expanded = True
             if not expanded:
                 paths.append(path)
+
+        return sorted(paths)
+
+    def _outgoing_paths(self, seed_id: str, *, max_depth: int) -> list[list[str]]:
+        max_nodes = max(1, max_depth)
+        paths: list[list[str]] = []
+        queue: list[list[str]] = [[seed_id]]
+
+        while queue:
+            path = queue.pop(0)
+            current_id = path[-1]
+            if len(path) >= max_nodes:
+                paths.append(path)
+                continue
+
+            outgoing_edges = sorted(
+                self._outgoing_by_source.get(current_id, []),
+                key=lambda edge: (
+                    _text(edge.get("target_id")),
+                    _text(edge.get("type")),
+                    _relationship_identity(edge),
+                ),
+            )
+            expanded = False
+            for edge in outgoing_edges:
+                target_id = _text(edge.get("target_id"))
+                if not target_id or target_id in path:
+                    continue
+                queue.append([*path, target_id])
+                expanded = True
+            if not expanded:
+                paths.append(path)
+
+        return sorted(paths)
+
+    def _context_paths(self, seed_id: str, *, max_depth: int) -> list[list[str]]:
+        max_nodes = max(1, max_depth)
+        incoming_paths = self._incoming_paths(seed_id, max_depth=max_depth)
+        outgoing_paths = self._outgoing_paths(seed_id, max_depth=max_depth)
+        paths: list[list[str]] = []
+        seen: set[tuple[str, ...]] = set()
+
+        for incoming_path in incoming_paths:
+            for outgoing_path in outgoing_paths:
+                combined = [*incoming_path, *outgoing_path[1:]][:max_nodes]
+                identity = tuple(combined)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                paths.append(combined)
 
         return sorted(paths)
 

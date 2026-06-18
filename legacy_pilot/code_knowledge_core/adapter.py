@@ -302,7 +302,14 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
 
     def _query_local_index(self, query: GraphQuery) -> dict[str, Any] | None:
         plan = plan_graph_query(query)
-        if plan.kind not in {"sql", "config", "exception"}:
+        if plan.kind not in {
+            "route_context",
+            "symbol_context",
+            "sql",
+            "config",
+            "exception",
+            "keyword",
+        }:
             return None
         index = self._local_indexes.get((query.repo_id, query.graph_id))
         if index is None:

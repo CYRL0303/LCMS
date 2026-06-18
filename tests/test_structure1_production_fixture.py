@@ -15,6 +15,8 @@ FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "java_spring_production_demo
 JAVA_ROOT = FIXTURE_ROOT / "src" / "main" / "java" / "com" / "legacy"
 RUN_ENV = "LEGACY_PILOT_RUN_GITNEXUS_INTEGRATION"
 GITNEXUS_ENV_KEYS = ("GITNEXUS_BIN", "GITNEXUS_REPO_ROOT")
+pytestmark = pytest.mark.structure1_production
+ENDPOINT_ID = "Route:/api/dataset/version"
 CONTROLLER_ID = (
     "Method:src/main/java/com/legacy/DatasetController.java:"
     "DatasetController.getVersion#1"
@@ -64,6 +66,44 @@ def test_query_graph_returns_local_enriched_contexts_after_indexing_production_f
 
     assert client.query_called is False
     _assert_production_query_contexts(table_context, config_context, exception_context)
+
+
+def test_query_graph_by_endpoint_returns_full_structure_chain_after_indexing_fixture():
+    client = FakeProductionGitNexusClient()
+    adapter = GitNexusCliCodeKnowledgeCoreAdapter(client=client)
+    request = _production_fixture_request()
+
+    adapter.index_repo(request)
+
+    context = adapter.query_graph(
+        GraphQuery(
+            repo_id=request.repo_id,
+            graph_id=f"GRAPH-{request.repo_id}",
+            query_terms=["/api/dataset/version"],
+            node_filters=["API Endpoint"],
+            edge_filters=[],
+            max_depth=6,
+            trace_id="TRACE-ENDPOINT",
+            contract_version="1.0.0",
+        )
+    )
+
+    assert client.query_called is False
+    assert {
+        (edge.source_node_id, edge.type, edge.target_node_id)
+        for edge in context.matched_edges
+    } >= {
+        (ENDPOINT_ID, "MAPS_TO_ENDPOINT", CONTROLLER_ID),
+        (CONTROLLER_ID, "CALLS", SERVICE_ID),
+        (SERVICE_ID, "CALLS", MAPPER_ID),
+        (MAPPER_ID, "EXECUTES_SQL", SQL_ID),
+        (SQL_ID, "READS_TABLE", TABLE_ID),
+    }
+    assert context.graph_paths
+    assert any(
+        path[0] == "/api/dataset/version" and path[-1].endswith("dataset_version")
+        for path in context.graph_paths
+    )
 
 
 def test_production_fixture_has_no_semantic_nodes_by_default():
@@ -119,6 +159,7 @@ def test_production_fixture_has_mock_semantic_nodes_when_explicitly_enabled():
 
 
 @pytest.mark.gitnexus_integration
+@pytest.mark.slow
 def test_real_gitnexus_index_supports_local_enriched_production_queries():
     adapter = _gitnexus_adapter_or_skip()
     request = _production_fixture_request()
@@ -206,6 +247,7 @@ def _assert_production_query_contexts(
 
 
 @pytest.mark.gitnexus_integration
+@pytest.mark.slow
 def test_index_repo_includes_sql_config_and_exception_nodes():
     adapter = _gitnexus_adapter_or_skip()
     snapshot = _index_production_fixture(adapter)
@@ -231,6 +273,8 @@ def test_index_repo_includes_sql_config_and_exception_nodes():
     assert {"code", "sql", "config"}.issubset(source_types)
     assert all(edge.evidence_refs for edge in snapshot.edges)
     assert all(evidence.source_type for edge in snapshot.edges for evidence in edge.evidence_refs)
+    evidence_ids = [evidence.evidence_id for evidence in snapshot.evidence_refs]
+    assert len(evidence_ids) == len(set(evidence_ids))
 
     node_ids = {node.node_id for node in snapshot.nodes}
     edge_pairs = {
@@ -241,9 +285,16 @@ def test_index_repo_includes_sql_config_and_exception_nodes():
         (edge.source_node_id, edge.type, edge.target_node_id): edge
         for edge in snapshot.edges
     }
-    assert {CONTROLLER_ID, SERVICE_ID, MAPPER_ID, SQL_ID, TABLE_ID, EXCEPTION_ID}.issubset(
-        node_ids
-    )
+    assert {
+        ENDPOINT_ID,
+        CONTROLLER_ID,
+        SERVICE_ID,
+        MAPPER_ID,
+        SQL_ID,
+        TABLE_ID,
+        EXCEPTION_ID,
+    }.issubset(node_ids)
+    assert (ENDPOINT_ID, "MAPS_TO_ENDPOINT", CONTROLLER_ID) in edge_pairs
     assert (CONTROLLER_ID, "CALLS", SERVICE_ID) in edge_pairs
     assert (SERVICE_ID, "CALLS", MAPPER_ID) in edge_pairs
     assert (MAPPER_ID, "EXECUTES_SQL", SQL_ID) in edge_pairs
@@ -260,6 +311,12 @@ def test_index_repo_includes_sql_config_and_exception_nodes():
     for edge_pair, expected_source_types in expected_edge_source_types.items():
         edge = edges_by_pair[edge_pair]
         assert {evidence.source_type for evidence in edge.evidence_refs} == expected_source_types
+    assert {
+        evidence.source_type
+        for evidence in edges_by_pair[
+            (ENDPOINT_ID, "MAPS_TO_ENDPOINT", CONTROLLER_ID)
+        ].evidence_refs
+    } == {"code"}
 
 
 def _gitnexus_adapter_or_skip() -> GitNexusCliCodeKnowledgeCoreAdapter:
@@ -283,6 +340,7 @@ class FakeProductionGitNexusClient:
             "graph_id": f"GRAPH-{request.repo_id}",
             "trace_id": f"TRACE-INDEX-{request.repo_id}",
             "nodes": [
+                _endpoint_node(),
                 _method_node(
                     CONTROLLER_ID,
                     "getVersion",
@@ -303,6 +361,7 @@ class FakeProductionGitNexusClient:
                 ),
             ],
             "relationships": [
+                _code_edge(ENDPOINT_ID, "MAPS_TO_ENDPOINT", CONTROLLER_ID),
                 _code_edge(CONTROLLER_ID, "CALLS", SERVICE_ID),
                 _code_edge(SERVICE_ID, "CALLS", MAPPER_ID),
             ],
@@ -317,6 +376,21 @@ class FakeProductionGitNexusClient:
             "paths": [],
             "not_found": True,
         }
+
+
+def _endpoint_node() -> dict:
+    return {
+        "id": ENDPOINT_ID,
+        "type": "API Endpoint",
+        "name": "/api/dataset/version",
+        "filePath": "src/main/java/com/legacy/DatasetController.java",
+        "startLine": 10,
+        "endLine": 16,
+        "source_type": "code",
+        "extraction_method": "java_parser",
+        "confidence": 0.9,
+        "properties": {"qualifiedName": "/api/dataset/version"},
+    }
 
 
 def _method_node(

@@ -15,14 +15,14 @@
 ```text
 backend = gitnexus_cli
 fixture = self_built_java_spring_demo
-sql_extractor = phase_2
+sql_extractor = completed in Structure 1 production coverage milestone
 ```
 
 Consequences:
 
 - First implementation does not start or depend on a GitNexus HTTP server.
 - Default test mode stays deterministic and does not require GitNexus.
-- MyBatis XML, SQL table extraction, and SQL edge semantics are excluded from first-release acceptance.
+- MyBatis XML, SQL table extraction, and SQL edge semantics were excluded from the initial GitNexus adapter first-release acceptance, but are now covered by the Structure 1 production coverage milestone.
 - GitNexus unavailable in real mode returns a recoverable `ContractError`; it must not silently fall back to mock data.
 
 ## Target File Map
@@ -440,7 +440,7 @@ HTTP contract shapes for existing endpoints are unchanged.
 
 ### Boundary
 
-This step adds a self-contained fixture and optional integration tests. It must not introduce MyBatis XML or SQL table acceptance.
+This step describes the original self-contained fixture and optional integration tests. Current Structure 1 production coverage adds a separate production fixture with MyBatis XML and SQL table acceptance.
 
 The fixture proves only:
 
@@ -543,8 +543,8 @@ No new capabilities are introduced here:
 
 ```text
 No gitnexus_http backend
-No MyBatis XML extractor
-No SQL table graph
+No new MyBatis XML extractor behavior beyond the Structure 1 production coverage implementation
+No new SQL table graph behavior beyond the Structure 1 production coverage implementation
 No RCA Engine direct GitNexus access
 No Incident Context Builder direct GitNexus access
 ```
@@ -605,7 +605,7 @@ Confirm documentation states:
 - Real backend is `gitnexus_cli`.
 - No silent fallback from real backend to mock.
 - `GraphContext` has no `metadata` or `missing_evidence` field.
-- MyBatis/SQL extractor is phase 2.
+- MyBatis/SQL extractor is implemented by the Structure 1 production coverage milestone; future work is limited to broader SQL dialect and multi-module coverage.
 - Other three structures consume only LCMS contract objects.
 
 ### Exit Criteria

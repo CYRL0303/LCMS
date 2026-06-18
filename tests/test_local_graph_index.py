@@ -120,6 +120,135 @@ def test_local_graph_index_keeps_full_structure_chain_when_edge_filter_identifie
     }
 
 
+def test_local_graph_index_returns_outgoing_path_for_endpoint_seed():
+    payload = {
+        "graph_id": "GRAPH-prod",
+        "nodes": [
+            {
+                "id": "Route:/api/dataset/version",
+                "type": "API Endpoint",
+                "name": "/api/dataset/version",
+            },
+            {"id": "Controller:getVersion", "type": "Method", "name": "DatasetController.getVersion"},
+            {"id": "Service:getVersion", "type": "Method", "name": "DatasetService.getVersion"},
+            {"id": "Mapper:selectVersionById", "type": "Method", "name": "DatasetMapper.selectVersionById"},
+            {"id": "SQL:selectVersionById", "type": "SQL", "name": "selectVersionById"},
+            {"id": "Table:dataset_version", "type": "Table", "name": "dataset_version"},
+        ],
+        "relationships": [
+            {
+                "id": "R0",
+                "source_id": "Route:/api/dataset/version",
+                "target_id": "Controller:getVersion",
+                "type": "MAPS_TO_ENDPOINT",
+            },
+            {
+                "id": "R1",
+                "source_id": "Controller:getVersion",
+                "target_id": "Service:getVersion",
+                "type": "CALLS",
+            },
+            {
+                "id": "R2",
+                "source_id": "Service:getVersion",
+                "target_id": "Mapper:selectVersionById",
+                "type": "CALLS",
+            },
+            {
+                "id": "R3",
+                "source_id": "Mapper:selectVersionById",
+                "target_id": "SQL:selectVersionById",
+                "type": "EXECUTES_SQL",
+            },
+            {
+                "id": "R4",
+                "source_id": "SQL:selectVersionById",
+                "target_id": "Table:dataset_version",
+                "type": "READS_TABLE",
+            },
+        ],
+    }
+
+    result = LocalGraphIndex.from_payload(payload).query(
+        term="/api/dataset/version",
+        node_filters=["API Endpoint"],
+        edge_filters=[],
+        max_depth=6,
+    )
+
+    assert result["paths"] == [
+        [
+            "Route:/api/dataset/version",
+            "Controller:getVersion",
+            "Service:getVersion",
+            "Mapper:selectVersionById",
+            "SQL:selectVersionById",
+            "Table:dataset_version",
+        ]
+    ]
+
+
+def test_local_graph_index_combines_upstream_and_downstream_for_method_seed():
+    payload = {
+        "graph_id": "GRAPH-prod",
+        "nodes": [
+            {"id": "Controller:getVersion", "type": "Method", "name": "DatasetController.getVersion"},
+            {
+                "id": "Service:getVersion",
+                "type": "Method",
+                "name": "DatasetService.getVersion",
+                "qualifiedName": "DatasetService.getVersion",
+            },
+            {"id": "Mapper:selectVersionById", "type": "Method", "name": "DatasetMapper.selectVersionById"},
+            {"id": "SQL:selectVersionById", "type": "SQL", "name": "selectVersionById"},
+            {"id": "Table:dataset_version", "type": "Table", "name": "dataset_version"},
+        ],
+        "relationships": [
+            {
+                "id": "R1",
+                "source_id": "Controller:getVersion",
+                "target_id": "Service:getVersion",
+                "type": "CALLS",
+            },
+            {
+                "id": "R2",
+                "source_id": "Service:getVersion",
+                "target_id": "Mapper:selectVersionById",
+                "type": "CALLS",
+            },
+            {
+                "id": "R3",
+                "source_id": "Mapper:selectVersionById",
+                "target_id": "SQL:selectVersionById",
+                "type": "EXECUTES_SQL",
+            },
+            {
+                "id": "R4",
+                "source_id": "SQL:selectVersionById",
+                "target_id": "Table:dataset_version",
+                "type": "READS_TABLE",
+            },
+        ],
+    }
+
+    result = LocalGraphIndex.from_payload(payload).query(
+        term="DatasetService.getVersion",
+        node_filters=["Method"],
+        edge_filters=[],
+        max_depth=5,
+    )
+
+    assert result["paths"] == [
+        [
+            "Controller:getVersion",
+            "Service:getVersion",
+            "Mapper:selectVersionById",
+            "SQL:selectVersionById",
+            "Table:dataset_version",
+        ]
+    ]
+
+
 def test_local_graph_index_returns_all_bfs_upstream_paths_within_depth():
     payload = {
         "graph_id": "GRAPH-prod",

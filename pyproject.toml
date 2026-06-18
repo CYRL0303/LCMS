@@ -21,5 +21,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
   "gitnexus_integration: requires local GitNexus runtime and is skipped by default",
+  "structure1_production: runs full Structure 1 Java/Spring fixture coverage",
+  "slow: longer-running integration or performance tests",
   "qwen_semantic_integration: requires DashScope Qwen API access and is skipped by default",
 ]
