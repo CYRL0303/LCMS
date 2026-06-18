@@ -22,7 +22,7 @@ SubmitAlert
 
 ## Current Progress
 
-Structure 1 is implemented through Milestone4 while preserving the middleware
+Structure 1 is implemented through Milestone5 while preserving the middleware
 contract boundary:
 
 - Milestone0-2: real `gitnexus_cli` indexing/query integration plus Structure 1
@@ -32,19 +32,23 @@ contract boundary:
 - Milestone4: semantic graph enrichment is disabled by default, has a
   deterministic mock backend, and supports opt-in DashScope Qwen API semantic
   summaries through `qwen_api`.
+- Milestone5: production hardening validates local repo paths before GitNexus
+  analyze, supports stable-index reuse, separates index/query timeouts, and
+  documents default/integration CI profiles.
 - Production fixture coverage proves `/api/dataset/version -> controller ->
   service -> mapper -> Mapper XML SQL -> dataset_version`, plus config and
   exception evidence.
 - Middleware/router and the four-structure contract models were not changed for
-  Milestone0-4 beyond backward-compatible Structure 1 metadata fields already
+  Milestone0-5 beyond backward-compatible Structure 1 metadata fields already
   present on `GraphSnapshot`.
 
 Latest local verification:
 
 ```text
-Default suite: 129 passed, 6 skipped
-Real GitNexus opt-in suite: 11 passed
-Real Qwen semantic opt-in test: 1 passed
+Default suite: 141 passed, 6 skipped, 1 warning
+Structure 1 production fixture: 5 passed, 2 skipped
+Real GitNexus opt-in suite: 12 passed
+Real Qwen semantic opt-in test: 1 passed, 2 pytest cache warnings
 ```
 
 ## Repository Layout
@@ -92,22 +96,50 @@ python -m pip install fastapi uvicorn pydantic pytest httpx
 
 ## Run Tests
 
+Default CI profile:
+
 ```bash
 python -m pytest -q
 ```
 
-GitNexus integration tests are skipped by default. To run them against a local GitNexus runtime:
+Structure 1 production fixture profile, with real GitNexus checks skipped by default:
+
+```bash
+python -m pytest tests/test_structure1_production_fixture.py -q -rs
+```
+
+GitNexus integration CI profile:
+
+1. Build the GitNexus CLI/runtime outside this repository.
+2. Set `GITNEXUS_BIN` to `gitnexus` or a wrapper such as `Q:/tmp/gitnexus-local.cmd`.
+3. Set `GITNEXUS_REPO_ROOT` to the local GitNexus runtime checkout.
+4. Enable opt-in integration tests with `LEGACY_PILOT_RUN_GITNEXUS_INTEGRATION=1`.
+5. Run the GitNexus integration suites.
 
 ```bash
 LEGACY_PILOT_RUN_GITNEXUS_INTEGRATION=1 \
 LEGACY_PILOT_CODE_CORE_BACKEND=gitnexus_cli \
 GITNEXUS_BIN=gitnexus \
 GITNEXUS_REPO_ROOT=Q:/Hackathons/GitNexus-main/GitNexus-main/gitnexus \
-GITNEXUS_TIMEOUT_SECONDS=120 \
-python -m pytest tests/test_gitnexus_integration.py -q
+LEGACY_PILOT_GITNEXUS_FORCE_ANALYZE=1 \
+GITNEXUS_INDEX_TIMEOUT_SECONDS=120 \
+GITNEXUS_QUERY_TIMEOUT_SECONDS=30 \
+python -m pytest tests/test_gitnexus_integration.py tests/test_structure1_production_fixture.py -q -rs
 ```
 
 `GITNEXUS_BIN` may also point to a local wrapper such as `Q:/tmp/gitnexus-local.cmd` when testing a source checkout build.
+
+GitNexus client controls:
+
+- `LEGACY_PILOT_GITNEXUS_FORCE_ANALYZE=1`: always run `gitnexus analyze`
+  before reading the graph with `cypher`.
+- `LEGACY_PILOT_GITNEXUS_FORCE_ANALYZE=0`: run `cypher` first; if the graph is
+  empty, run `analyze` and retry `cypher` once.
+- `GITNEXUS_INDEX_TIMEOUT_SECONDS`: timeout for `analyze`.
+- `GITNEXUS_QUERY_TIMEOUT_SECONDS`: timeout for `cypher`, `context`, `trace`,
+  and `impact` style queries.
+- `GITNEXUS_TIMEOUT_SECONDS`: backward-compatible fallback when the more
+  specific timeout variables are not set.
 
 Default backend: `mock`.
 Real backend: `gitnexus_cli`.
@@ -143,8 +175,9 @@ They are always evidence-backed with `source_type="llm_semantic_summary"`,
 higher than `LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP`.
 
 Semantic nodes are not trusted structural facts and do not replace GitNexus
-structural nodes or SQL/config/exception enrichers. `ollama` remains reserved;
-`qwen_api` is supported through the OpenAI-compatible DashScope Chat API.
+structural nodes or SQL/config/exception enrichers. The real LLM backend for
+Structure 1 coverage is `qwen_api` through the OpenAI-compatible DashScope Chat
+API; no `ollama` backend is part of the current acceptance path.
 
 ## Run The API
 

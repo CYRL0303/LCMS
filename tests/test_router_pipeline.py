@@ -59,6 +59,22 @@ class FailingFakeAdapter(CodeKnowledgeCoreAdapter):
         raise QueryError("graph backend unavailable", recoverable=True)
 
 
+class DiagnosticFailingFakeAdapter(CodeKnowledgeCoreAdapter):
+    def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
+        raise IndexingError(
+            "GitNexus CLI failed while indexing repo.",
+            recoverable=True,
+            diagnostics={"stderr": "Traceback: internal secret", "returncode": "17"},
+        )
+
+    def query_graph(self, query: GraphQuery) -> GraphContext:
+        raise QueryError(
+            "GitNexus CLI failed while querying graph.",
+            recoverable=True,
+            diagnostics={"stderr": "Traceback: internal secret", "returncode": "17"},
+        )
+
+
 def alert_event() -> AlertEvent:
     return AlertEvent(
         alert_id="ALERT-001",
@@ -439,3 +455,23 @@ class TestCodeKnowledgeCoreErrorConversion:
         assert error.message == "graph backend unavailable"
         assert error.source_module == "code_knowledge_core"
         assert error.recoverable is True
+
+    def test_gitnexus_diagnostics_are_not_exposed_as_contract_message_text(self):
+        router = MiddlewareRouter(
+            code_knowledge_core_adapter=DiagnosticFailingFakeAdapter()
+        )
+        request = RepoIndexRequest(
+            repo_id="repo-fail",
+            repo_uri="file:///missing",
+            language_hint="java",
+            parser_profile="default",
+            contract_version="1.0.0",
+        )
+
+        with pytest.raises(ContractViolation) as excinfo:
+            router.index_repo(request)
+
+        error = excinfo.value.error
+        assert error.message == "GitNexus CLI failed while indexing repo."
+        assert "Traceback" not in error.message
+        assert "internal secret" not in error.message

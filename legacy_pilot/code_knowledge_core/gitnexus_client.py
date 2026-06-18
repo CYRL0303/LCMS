@@ -31,16 +31,35 @@ class GitNexusCliClient:
         gitnexus_bin: str | None = None,
         repo_root: str | None = None,
         timeout_seconds: float | int | None = None,
+        index_timeout_seconds: float | int | None = None,
+        query_timeout_seconds: float | int | None = None,
+        force_analyze: bool | None = None,
         max_graph_nodes: int | None = None,
         max_graph_edges: int | None = None,
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ):
         self.gitnexus_bin = gitnexus_bin or os.getenv("GITNEXUS_BIN") or DEFAULT_GITNEXUS_BIN
         self.repo_root = repo_root or os.getenv("GITNEXUS_REPO_ROOT")
-        self.timeout_seconds = _float_config(
+        timeout_default = _float_config(
             timeout_seconds,
             "GITNEXUS_TIMEOUT_SECONDS",
             DEFAULT_TIMEOUT_SECONDS,
+        )
+        self.timeout_seconds = timeout_default
+        self.index_timeout_seconds = _float_config(
+            index_timeout_seconds,
+            "GITNEXUS_INDEX_TIMEOUT_SECONDS",
+            timeout_default,
+        )
+        self.query_timeout_seconds = _float_config(
+            query_timeout_seconds,
+            "GITNEXUS_QUERY_TIMEOUT_SECONDS",
+            timeout_default,
+        )
+        self.force_analyze = _bool_config(
+            force_analyze,
+            "LEGACY_PILOT_GITNEXUS_FORCE_ANALYZE",
+            True,
         )
         self.max_graph_nodes = _int_config(
             max_graph_nodes,
@@ -56,7 +75,36 @@ class GitNexusCliClient:
         self.last_diagnostics: dict[str, str] = {}
 
     def index_repo(self, request: RepoIndexRequest) -> dict[str, Any]:
-        repo_path = _repo_path(request.repo_uri)
+        repo_path = self._validated_repo_path(request.repo_uri)
+        if self.force_analyze:
+            self._run_analyze(repo_path, request.repo_id)
+            payload = self._run_index_cypher(request)
+        else:
+            payload = self._run_index_cypher(request)
+            if not _has_graph_rows(payload):
+                self._run_analyze(repo_path, request.repo_id)
+                payload = self._run_index_cypher(request)
+        payload["repo_path"] = repo_path
+        return payload
+
+    def _validated_repo_path(self, repo_uri: str) -> str:
+        try:
+            repo_path = _local_repo_path(repo_uri)
+        except ValueError:
+            raise self._error(
+                "index",
+                "repo_uri must resolve to a local filesystem path.",
+                diagnostics={"repo_uri": repo_uri},
+            ) from None
+        if not os.path.exists(repo_path):
+            raise self._error(
+                "index",
+                "repo_uri path must exist before GitNexus analyze.",
+                diagnostics={"repo_uri": repo_uri, "repo_path": repo_path},
+            )
+        return repo_path
+
+    def _run_analyze(self, repo_path: str, repo_id: str) -> None:
         analyze_command = [
             self.gitnexus_bin,
             "analyze",
@@ -64,9 +112,11 @@ class GitNexusCliClient:
             "--skip-git",
             "--index-only",
             "--name",
-            request.repo_id,
+            repo_id,
         ]
-        self._run_text(analyze_command, operation="index")
+        self._run_text(analyze_command, operation="index", timeout_category="index")
+
+    def _run_index_cypher(self, request: RepoIndexRequest) -> dict[str, Any]:
         raw_payload = self._run_json(
             [
                 self.gitnexus_bin,
@@ -80,10 +130,9 @@ class GitNexusCliClient:
                 request.repo_id,
             ],
             operation="index",
+            timeout_category="query",
         )
-        payload = self._normalize_cypher_graph_payload(raw_payload, request=request)
-        payload["repo_path"] = repo_path
-        return payload
+        return self._normalize_cypher_graph_payload(raw_payload, request=request)
 
     def query_graph(self, query: GraphQuery) -> dict[str, Any]:
         plan = plan_graph_query(query)
@@ -107,14 +156,35 @@ class GitNexusCliClient:
                 "--content",
             ],
             operation="query",
+            timeout_category="query",
         )
         return self._normalize_context_query_payload(raw_context, query=query)
 
-    def _run_text(self, command: list[str], *, operation: str) -> str:
-        return self._run_completed(command, operation=operation).stdout or ""
+    def _run_text(
+        self,
+        command: list[str],
+        *,
+        operation: str,
+        timeout_category: str,
+    ) -> str:
+        return self._run_completed(
+            command,
+            operation=operation,
+            timeout_seconds=self._timeout_seconds(timeout_category),
+        ).stdout or ""
 
-    def _run_json(self, command: list[str], *, operation: str) -> dict[str, Any]:
-        result = self._run_completed(command, operation=operation)
+    def _run_json(
+        self,
+        command: list[str],
+        *,
+        operation: str,
+        timeout_category: str,
+    ) -> dict[str, Any]:
+        result = self._run_completed(
+            command,
+            operation=operation,
+            timeout_seconds=self._timeout_seconds(timeout_category),
+        )
         try:
             payload = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
@@ -136,6 +206,7 @@ class GitNexusCliClient:
         command: list[str],
         *,
         operation: str,
+        timeout_seconds: float,
     ) -> subprocess.CompletedProcess[str]:
         try:
             result = self._runner(
@@ -145,7 +216,7 @@ class GitNexusCliClient:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=self.timeout_seconds,
+                timeout=timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
@@ -178,6 +249,11 @@ class GitNexusCliClient:
                 diagnostics=self.last_diagnostics,
             )
         return result
+
+    def _timeout_seconds(self, timeout_category: str) -> float:
+        if timeout_category == "index":
+            return self.index_timeout_seconds
+        return self.query_timeout_seconds
 
     def _normalize_index_payload(
         self,
@@ -252,6 +328,8 @@ class GitNexusCliClient:
         rows = _markdown_table_rows(markdown)
         nodes_by_id: dict[str, dict[str, Any]] = {}
         relationships: list[dict[str, Any]] = []
+        routes_by_process: dict[str, list[str]] = {}
+        methods_by_process: dict[str, list[str]] = {}
 
         for row in rows:
             source_id = _string_value(row.get("n.id"))
@@ -261,6 +339,10 @@ class GitNexusCliClient:
                 continue
             nodes_by_id.setdefault(source_id, _node_payload_from_gitnexus_id(source_id))
             nodes_by_id.setdefault(target_id, _node_payload_from_gitnexus_id(target_id))
+            if relationship_type == "ENTRY_POINT_OF" and _is_route_id(source_id):
+                routes_by_process.setdefault(target_id, []).append(source_id)
+            if relationship_type == "STEP_IN_PROCESS" and _is_method_id(source_id):
+                methods_by_process.setdefault(target_id, []).append(source_id)
             relationships.append(
                 {
                     "id": _relationship_id(source_id, relationship_type, target_id),
@@ -272,6 +354,13 @@ class GitNexusCliClient:
                     "evidence_signals": [_string_value(row.get("r.reason")) or "cypher"],
                 }
             )
+
+        relationships.extend(
+            _route_endpoint_relationships(
+                routes_by_process=routes_by_process,
+                methods_by_process=methods_by_process,
+            )
+        )
 
         return {
             "repo_id": request.repo_id,
@@ -305,6 +394,7 @@ class GitNexusCliClient:
                 query.repo_id,
             ],
             operation="query",
+            timeout_category="query",
         )
         rows = _markdown_table_rows(_string_value(raw_payload.get("markdown")) or "")
         for row in rows:
@@ -331,6 +421,7 @@ class GitNexusCliClient:
                 query.repo_id,
             ],
             operation="query",
+            timeout_category="query",
         )
         rows = _markdown_table_rows(_string_value(raw_payload.get("markdown")) or "")
         for row in rows:
@@ -430,6 +521,31 @@ def _int_config(value: int | None, env_key: str, default: int) -> int:
         return default
 
 
+def _bool_config(value: bool | None, env_key: str, default: bool) -> bool:
+    if value is not None:
+        return bool(value)
+    env_value = os.getenv(env_key)
+    if env_value is None:
+        return default
+    normalized = env_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _local_repo_path(repo_uri: str) -> str:
+    if _looks_like_windows_path(repo_uri):
+        return repo_uri
+    parsed = urlparse(repo_uri)
+    if parsed.scheme and parsed.scheme != "file":
+        raise ValueError("repo_uri is not a local path")
+    if parsed.scheme == "file" and parsed.netloc not in {"", "localhost"}:
+        raise ValueError("repo_uri is not a local path")
+    return _repo_path(repo_uri)
+
+
 def _repo_path(repo_uri: str) -> str:
     if repo_uri.startswith("file://"):
         parsed = urlparse(repo_uri)
@@ -438,6 +554,14 @@ def _repo_path(repo_uri: str) -> str:
             return path[1:]
         return path
     return repo_uri
+
+
+def _looks_like_windows_path(value: str) -> bool:
+    return len(value) >= 3 and value[1] == ":" and value[0].isalpha()
+
+
+def _has_graph_rows(payload: dict[str, Any]) -> bool:
+    return bool(payload.get("nodes") or payload.get("relationships"))
 
 
 def _operation_phrase(operation: str) -> str:
@@ -543,6 +667,7 @@ def _markdown_table_cells(line: str) -> list[str]:
 
 def _node_payload_from_gitnexus_id(node_id: str) -> dict[str, Any]:
     node_type, _, body = node_id.partition(":")
+    normalized_type = "API Endpoint" if node_type == "Route" else node_type
     name = body or node_id
     file_path = None
     qualified_name = None
@@ -565,10 +690,46 @@ def _node_payload_from_gitnexus_id(node_id: str) -> dict[str, Any]:
 
     return {
         "id": node_id,
-        "type": node_type or "Unknown",
+        "type": normalized_type or "Unknown",
         "name": name,
         "properties": properties,
     }
+
+
+def _route_endpoint_relationships(
+    *,
+    routes_by_process: dict[str, list[str]],
+    methods_by_process: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    relationships: list[dict[str, Any]] = []
+    for process_id, route_ids in routes_by_process.items():
+        method_ids = methods_by_process.get(process_id, [])
+        for route_id in route_ids:
+            for method_id in method_ids:
+                relationships.append(
+                    {
+                        "id": _relationship_id(route_id, "MAPS_TO_ENDPOINT", method_id),
+                        "type": "MAPS_TO_ENDPOINT",
+                        "source_id": route_id,
+                        "target_id": method_id,
+                        "confidence": 0.85,
+                        "reason": "gitnexus-process-entrypoint",
+                        "evidence_signals": [
+                            "ENTRY_POINT_OF",
+                            "STEP_IN_PROCESS",
+                            process_id,
+                        ],
+                    }
+                )
+    return relationships
+
+
+def _is_route_id(node_id: str) -> bool:
+    return node_id.startswith("Route:")
+
+
+def _is_method_id(node_id: str) -> bool:
+    return node_id.startswith("Method:")
 
 
 def _node_payload_from_context_item(item: dict[str, Any]) -> dict[str, Any]:

@@ -612,7 +612,7 @@ Mapper interface method
 
 GitNexus 已具备 Spring route extraction 和 Java scope-resolution 能力，因此首版可以直接复用。
 
-MyBatis / Mapper XML / SQL table 作为第二阶段：
+Milestone2-Milestone5 当前状态：MyBatis / Mapper XML / SQL table 已接入：
 
 ```text
 Mapper interface -> XML statement
@@ -620,7 +620,9 @@ XML statement -> SQL table
 Service method -> Mapper method -> SQL table
 ```
 
-第二阶段可以新增轻量 extractor，不影响首版 adapter 架构。
+SQL/config/exception facts come from deterministic Python enrichers merged
+after the GitNexus structural graph. This stays inside Code Knowledge Core and
+does not change middleware contracts.
 
 ## 14. 与其他三个结构的约束
 
@@ -714,7 +716,8 @@ GitNexus not indexed becomes recoverable ContractError.
 @RestController + @GetMapping
 Controller method calls Service method
 Service method calls Mapper method
-No MyBatis XML or SQL table fixture
+Mapper XML statement reads dataset_version table
+application.yml config and Java exception nodes are extracted
 ```
 
 首版 integration 验收：
@@ -723,6 +726,8 @@ No MyBatis XML or SQL table fixture
 IndexRepo creates non-empty GraphSnapshot.
 QueryGraph("DatasetService.getVersion") returns Method node.
 QueryGraph("/api/dataset/version") returns Route or Controller context.
+Route ENTRY_POINT_OF + Method STEP_IN_PROCESS is normalized to MAPS_TO_ENDPOINT.
+Production fixture proves endpoint -> controller -> service -> mapper -> SQL -> table.
 Returned edges have EvidenceRef.
 GraphContext.trace_id equals request.trace_id.
 ```
@@ -864,8 +869,8 @@ QueryGraph:
 首版领域:
   Java/Spring Boot route/controller/service 图谱。
 
-首版 SQL 能力:
-  不阻塞结构 1 接入；MyBatis/Mapper XML/SQL table 放到第二阶段。
+Milestone2+ SQL 能力:
+  MyBatis/Mapper XML/SQL table 已接入 Structure 1 enrichers，并由 production fixture 覆盖。
 
 真实模式降级:
   GitNexus 不可用时返回 ContractError，不静默回退 mock。
@@ -875,5 +880,5 @@ QueryGraph:
 
 ```text
 1. Java/Spring fixture 默认使用 tests/fixtures/java_spring_demo。
-2. MyBatis/SQL extractor 作为第二阶段开发，不是结构 1 首版验收条件。
+2. MyBatis/SQL extractor 已完成最小 production fixture 覆盖；后续仅扩展复杂 SQL、多模块和 dialect parser。
 ```
