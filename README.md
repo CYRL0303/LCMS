@@ -101,14 +101,23 @@ $env:LEGACY_PILOT_SEMANTIC_BACKEND='mock'
 $env:LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP='0.7'
 ```
 
+The real DashScope Qwen backend can be enabled explicitly for opt-in tests:
+
+```powershell
+$env:LEGACY_PILOT_SEMANTIC_BACKEND='qwen_api'
+$env:LEGACY_PILOT_SEMANTIC_BASE_URL='https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
+$env:LEGACY_PILOT_SEMANTIC_MODEL='qwen-plus'
+$env:DASHSCOPE_API_KEY='<set outside git>'
+```
+
 Semantic nodes are LCMS graph nodes with `type="Function Semantic Summary"`.
 They are always evidence-backed with `source_type="llm_semantic_summary"`,
 `extraction_method="llm"`, `verification_status="pending"`, and confidence no
 higher than `LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP`.
 
 Semantic nodes are not trusted structural facts and do not replace GitNexus
-structural nodes or SQL/config/exception enrichers. `ollama` and `qwen_api`
-are reserved backend names; Milestone4 verifies only `disabled` and `mock`.
+structural nodes or SQL/config/exception enrichers. `ollama` remains reserved;
+`qwen_api` is supported through the OpenAI-compatible DashScope Chat API.
 
 ## Run The API
 

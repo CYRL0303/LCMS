@@ -1005,3 +1005,29 @@ GitNexusCliCodeKnowledgeCoreAdapter constructor keeps existing parameters and ad
 GraphSnapshot.semantic_enrichment_version uses existing optional contract field.
 Node metadata receives semantic properties through existing gitnexus mapper metadata path.
 ```
+
+## Follow-Up: Real Qwen API Verification
+
+After the original Milestone4 mock-only implementation, `qwen_api` was added as
+an opt-in real semantic backend using DashScope's OpenAI-compatible Chat
+Completions API.
+
+Runtime environment:
+
+```text
+LEGACY_PILOT_SEMANTIC_BACKEND=qwen_api
+LEGACY_PILOT_SEMANTIC_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+LEGACY_PILOT_SEMANTIC_MODEL=qwen-plus
+DASHSCOPE_API_KEY=<set outside git>
+```
+
+Validation remains opt-in and must not run in default CI:
+
+```powershell
+$env:LEGACY_PILOT_RUN_QWEN_SEMANTIC_INTEGRATION='1'
+$env:LEGACY_PILOT_SEMANTIC_BACKEND='qwen_api'
+$env:LEGACY_PILOT_SEMANTIC_BASE_URL='https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
+$env:LEGACY_PILOT_SEMANTIC_MODEL='qwen-plus'
+$env:DASHSCOPE_API_KEY='<set outside git>'
+python -m pytest tests/test_semantic_enrichment.py::test_qwen_api_semantic_enricher_real_request -q -rs
+```

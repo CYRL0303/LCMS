@@ -584,6 +584,20 @@ nodes and `HAS_SEMANTIC_ACTION` edges with `source_type=llm_semantic_summary`,
 `extraction_method=llm`, and capped confidence. Structural graph facts continue
 to come from GitNexus plus deterministic SQL/config/exception extractors.
 
+Supported semantic backends:
+
+```text
+LEGACY_PILOT_SEMANTIC_BACKEND=disabled|mock|qwen_api
+LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP=0.7
+LEGACY_PILOT_SEMANTIC_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+LEGACY_PILOT_SEMANTIC_MODEL=qwen-plus
+DASHSCOPE_API_KEY=<set outside git>
+```
+
+The `qwen_api` backend uses DashScope's OpenAI-compatible Chat Completions API
+and remains opt-in. API keys must be injected through the environment and must
+not be committed to repository files.
+
 ## 13. Java/Spring 首版范围
 
 首版结构 1 面向 Java/Spring Boot legacy repo，优先覆盖：

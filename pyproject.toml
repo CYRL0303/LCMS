@@ -21,4 +21,5 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
   "gitnexus_integration: requires local GitNexus runtime and is skipped by default",
+  "qwen_semantic_integration: requires DashScope Qwen API access and is skipped by default",
 ]
