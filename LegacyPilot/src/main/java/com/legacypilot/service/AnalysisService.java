@@ -8,13 +8,8 @@ import com.legacypilot.entity.IncidentRecord;
 import com.legacypilot.entity.LegacyProject;
 import com.legacypilot.entity.RepositoryIndex;
 import com.legacypilot.entity.RepositorySourceType;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,6 +30,7 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 @Service
 public class AnalysisService {
     private final GitRepositoryService gitRepositoryService;
+    private final RepositoryFileScannerService repositoryFileScannerService;
 
     // Process-local stores. These are intentionally temporary: restarting the
     // backend clears them.
@@ -43,8 +39,12 @@ public class AnalysisService {
     private final Map<String, AnalysisTask> tasks = new ConcurrentHashMap<>();
     private final Map<String, IncidentRecord> incidents = new ConcurrentHashMap<>();
 
-    public AnalysisService(GitRepositoryService gitRepositoryService) {
+    public AnalysisService(
+            GitRepositoryService gitRepositoryService,
+            RepositoryFileScannerService repositoryFileScannerService
+    ) {
         this.gitRepositoryService = gitRepositoryService;
+        this.repositoryFileScannerService = repositoryFileScannerService;
     }
 
     /**
@@ -91,6 +91,21 @@ public class AnalysisService {
     }
 
     /**
+     * Looks up a connected repository by ID.
+     *
+     * This is a temporary read boundary over the in-memory store. When SQL is
+     * added, callers should move to a repository/mapper abstraction without
+     * changing their business flow.
+     */
+    public RepositoryIndex getRepository(String repoId) {
+        RepositoryIndex repository = repositories.get(repoId);
+        if (repository == null) {
+            throw new ResponseStatusException(NOT_FOUND, "Repository not found: " + repoId);
+        }
+        return repository;
+    }
+
+    /**
      * Creates a project and connects a local Git repository in one call.
      *
      * This endpoint is intended for the first local demo and Postman testing.
@@ -115,7 +130,8 @@ public class AnalysisService {
         projects.put(projectId, project);
 
         RepositoryIndex repository = createLocalRepositoryIndex(project, localRepository, createdAt);
-        return new ConnectLocalProjectResponse(project, repository);
+        RepositoryFilesResponse files = listRepositoryFiles(repository.repoId());
+        return new ConnectLocalProjectResponse(project, repository, files, null);
     }
 
     /**
@@ -416,117 +432,7 @@ public class AnalysisService {
      * works before GitNexus integration is added.
      */
     public RepositoryFilesResponse listRepositoryFiles(String repoId) {
-        RepositoryIndex repository = repositories.get(repoId);
-        if (repository == null) {
-            throw new ResponseStatusException(NOT_FOUND, "Repository not found: " + repoId);
-        }
-        if (repository.localRepoPath() == null || repository.localRepoPath().isBlank()) {
-            throw new ResponseStatusException(BAD_REQUEST, "Repository does not have a local path.");
-        }
-
-        Path root = Path.of(repository.localRepoPath()).toAbsolutePath().normalize();
-        if (!Files.isDirectory(root)) {
-            throw new ResponseStatusException(BAD_REQUEST, "Repository local path is not available.");
-        }
-
-        List<String> javaFiles = new ArrayList<>();
-        List<String> pythonFiles = new ArrayList<>();
-        List<String> configFiles = new ArrayList<>();
-        List<String> buildFiles = new ArrayList<>();
-        List<String> markdownFiles = new ArrayList<>();
-
-        int totalFiles = 0;
-        try (var stream = Files.walk(root)) {
-            List<Path> files = stream
-                    .filter(Files::isRegularFile)
-                    .filter(path -> !isIgnoredPath(root, path))
-                    .toList();
-            totalFiles = files.size();
-
-            for (Path file : files) {
-                String relativePath = toRelativePath(root, file);
-                String lower = relativePath.toLowerCase();
-                if (lower.endsWith(".java")) {
-                    javaFiles.add(relativePath);
-                } else if (lower.endsWith(".py")) {
-                    pythonFiles.add(relativePath);
-                } else if (isConfigFile(lower)) {
-                    configFiles.add(relativePath);
-                } else if (isBuildFile(lower)) {
-                    buildFiles.add(relativePath);
-                } else if (lower.endsWith(".md") || lower.endsWith(".markdown")) {
-                    markdownFiles.add(relativePath);
-                }
-            }
-        } catch (IOException exception) {
-            throw new ResponseStatusException(BAD_REQUEST, "Failed to scan repository files.");
-        }
-
-        return new RepositoryFilesResponse(
-                repository.repoId(),
-                repository.localRepoPath(),
-                totalFiles,
-                javaFiles,
-                pythonFiles,
-                configFiles,
-                buildFiles,
-                markdownFiles
-        );
-    }
-
-    /**
-     * Keeps the scan focused on project source files instead of Git internals
-     * and generated dependency/build folders.
-     */
-    private boolean isIgnoredPath(Path root, Path path) {
-        Path relative = root.relativize(path);
-        for (Path part : relative) {
-            String name = part.toString();
-            if (name.equals(".git")
-                    || name.equals(".idea")
-                    || name.equals(".vscode")
-                    || name.equals("__pycache__")
-                    || name.equals("node_modules")
-                    || name.equals("target")
-                    || name.equals("build")
-                    || name.equals("dist")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Normalizes Windows separators to forward slashes so API output is stable.
-     */
-    private String toRelativePath(Path root, Path file) {
-        return root.relativize(file).toString().replace('\\', '/');
-    }
-
-    private boolean isConfigFile(String lowerPath) {
-        return lowerPath.endsWith(".yml")
-                || lowerPath.endsWith(".yaml")
-                || lowerPath.endsWith(".properties")
-                || lowerPath.endsWith(".json")
-                || lowerPath.endsWith(".toml")
-                || lowerPath.endsWith(".ini")
-                || lowerPath.endsWith(".env")
-                || lowerPath.endsWith(".xml")
-                || lowerPath.endsWith(".gitignore")
-                || lowerPath.endsWith("requirements.txt");
-    }
-
-    private boolean isBuildFile(String lowerPath) {
-        return lowerPath.endsWith("pom.xml")
-                || lowerPath.endsWith("build.gradle")
-                || lowerPath.endsWith("build.gradle.kts")
-                || lowerPath.endsWith("settings.gradle")
-                || lowerPath.endsWith("settings.gradle.kts")
-                || lowerPath.endsWith("package.json")
-                || lowerPath.endsWith("pnpm-lock.yaml")
-                || lowerPath.endsWith("yarn.lock")
-                || lowerPath.endsWith("package-lock.json")
-                || lowerPath.endsWith("pyproject.toml")
-                || lowerPath.endsWith("setup.py");
+        RepositoryIndex repository = getRepository(repoId);
+        return repositoryFileScannerService.scanRepositoryFiles(repository);
     }
 }

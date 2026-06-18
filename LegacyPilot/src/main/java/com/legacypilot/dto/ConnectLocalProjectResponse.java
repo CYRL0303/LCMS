@@ -10,6 +10,10 @@ public record ConnectLocalProjectResponse(
         /** Newly created project metadata. */
         LegacyProject project,
         /** Newly connected repository metadata. */
-        RepositoryIndex repository
+        RepositoryIndex repository,
+        /** Immediate file scan result for the connected local repository. */
+        RepositoryFilesResponse files,
+        /** Code graph analysis summary returned by the Python code knowledge service. */
+        RepositoryGraphAnalysisResponse graph
 ) {
 }
