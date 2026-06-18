@@ -154,6 +154,6 @@ http://127.0.0.1:8000/health
 - Real Structure 1 execution is available only through the opt-in `gitnexus_cli` backend.
 - `gitnexus_http` is not implemented.
 - MyBatis XML and SQL table extraction are phase 2 scope.
-- No real Qwen/LLM call is connected yet.
+- Real Qwen semantic enrichment is available only through the opt-in `qwen_api` backend.
 - No persistent incident database is connected yet.
 - Router outputs are deterministic mock responses used to validate the middleware contract and MVP flow.

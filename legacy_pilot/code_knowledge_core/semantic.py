@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from json import dumps, loads
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -109,7 +109,7 @@ class MockSemanticEnricher:
 
 @dataclass(frozen=True)
 class QwenApiSemanticEnricher:
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     base_url: str = DEFAULT_QWEN_BASE_URL
     model: str = DEFAULT_QWEN_MODEL
     confidence_cap: float = DEFAULT_CONFIDENCE_CAP
@@ -212,7 +212,6 @@ def create_semantic_enricher(
         return MockSemanticEnricher(confidence_cap=cap)
     if selected_backend == "qwen_api":
         return QwenApiSemanticEnricher(
-            api_key=os.getenv(DASHSCOPE_API_KEY_ENV),
             base_url=os.getenv(SEMANTIC_BASE_URL_ENV, DEFAULT_QWEN_BASE_URL),
             model=os.getenv(SEMANTIC_MODEL_ENV, DEFAULT_QWEN_MODEL),
             confidence_cap=cap,

@@ -195,6 +195,12 @@ def test_qwen_api_semantic_enricher_requires_api_key():
         raise AssertionError("expected qwen_api to require an API key")
 
 
+def test_qwen_api_semantic_enricher_repr_does_not_expose_api_key():
+    enricher = QwenApiSemanticEnricher(api_key="secret-test-key")
+
+    assert "secret-test-key" not in repr(enricher)
+
+
 @pytest.mark.qwen_semantic_integration
 def test_qwen_api_semantic_enricher_real_request():
     if os.getenv(QWEN_RUN_ENV) != "1" or not os.getenv("DASHSCOPE_API_KEY"):

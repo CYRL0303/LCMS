@@ -564,6 +564,64 @@ def test_gitnexus_adapter_wraps_semantic_failures_as_indexing_error():
     }
 
 
+def test_gitnexus_adapter_qwen_env_backend_maps_semantic_graph(monkeypatch):
+    from legacy_pilot.code_knowledge_core import semantic as semantic_module
+
+    requests = []
+
+    def fake_http_post_json(url: str, *, headers: dict[str, str], body: dict) -> dict:
+        requests.append({"url": url, "headers": headers, "body": body})
+        return {
+            "choices": [
+                {"message": {"content": "Qwen summary from adapter path."}}
+            ]
+        }
+
+    monkeypatch.setenv("LEGACY_PILOT_SEMANTIC_BACKEND", "qwen_api")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    monkeypatch.setenv("LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP", "0.31")
+    monkeypatch.setattr(semantic_module, "_http_post_json", fake_http_post_json)
+    adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+        client=FakeGitNexusClient(),
+        index_enrichers=[],
+        now=lambda: datetime(2026, 6, 18, tzinfo=UTC),
+    )
+    request = RepoIndexRequest(
+        repo_id="repo-real",
+        repo_uri="file:///repo-real",
+        language_hint="java",
+        parser_profile="spring-boot",
+        contract_version="1.0.0",
+    )
+
+    snapshot = adapter.index_repo(request)
+
+    semantic_nodes = [
+        node for node in snapshot.nodes if node.type == "Function Semantic Summary"
+    ]
+    semantic_evidence = [
+        evidence
+        for evidence in snapshot.evidence_refs
+        if evidence.source_type == "llm_semantic_summary"
+    ]
+    assert requests
+    assert requests[0]["headers"]["Authorization"] == "Bearer test-key"
+    assert semantic_nodes
+    assert semantic_nodes[0].metadata["gitnexus"]["properties"]["summary"] == (
+        "Qwen summary from adapter path."
+    )
+    assert snapshot.semantic_enrichment_version == "qwen_api:qwen-plus"
+    assert snapshot.metadata["semantic_enrichment"] == {
+        "backend": "qwen_api",
+        "version": "qwen_api:qwen-plus",
+        "verification_status": "pending",
+        "confidence_cap": 0.31,
+    }
+    assert semantic_evidence
+    assert all(evidence.extraction_method == "llm" for evidence in semantic_evidence)
+    assert all(evidence.confidence <= 0.31 for evidence in semantic_evidence)
+
+
 class TestBackendFactory:
     def test_missing_backend_selects_mock_adapter(self, monkeypatch):
         monkeypatch.delenv("LEGACY_PILOT_CODE_CORE_BACKEND", raising=False)
