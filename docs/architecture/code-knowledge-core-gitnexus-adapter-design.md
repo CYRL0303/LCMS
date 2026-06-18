@@ -562,6 +562,28 @@ LEGACY_PILOT_MAX_GRAPH_EDGES=400
 当前真实 backend 只有 `gitnexus_cli`。`gitnexus_http` 不在首版实现范围内。
 当选择 `gitnexus_cli` 且 GitNexus 不可用时，系统返回 recoverable `ContractError`，不静默回退到 mock。
 
+## Semantic Enrichment Boundary
+
+Milestone4 keeps semantic enrichment inside Code Knowledge Core. The HTTP
+middleware still sees only LCMS contract models and continues to own
+`contract_version` and `trace_id` validation.
+
+Index flow:
+
+```text
+GitNexusCliClient.index_repo()
+-> structural enrichers: SQL / config / exception
+-> semantic enricher: disabled by default, mock when explicitly enabled
+-> merge_graph_payloads()
+-> gitnexus_mapper.map_index_payload()
+-> GraphSnapshot
+```
+
+Semantic enrichment is not a parser replacement. It creates pending semantic
+nodes and `HAS_SEMANTIC_ACTION` edges with `source_type=llm_semantic_summary`,
+`extraction_method=llm`, and capped confidence. Structural graph facts continue
+to come from GitNexus plus deterministic SQL/config/exception extractors.
+
 ## 13. Java/Spring 首版范围
 
 首版结构 1 面向 Java/Spring Boot legacy repo，优先覆盖：

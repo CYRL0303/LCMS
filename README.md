@@ -86,6 +86,30 @@ Default backend: `mock`.
 Real backend: `gitnexus_cli`.
 There is no silent fallback from `gitnexus_cli` to `mock`; GitNexus runtime failures become recoverable contract errors.
 
+### Structure 1 Semantic Enrichment
+
+Semantic enrichment is disabled by default.
+
+```powershell
+$env:LEGACY_PILOT_SEMANTIC_BACKEND='disabled'
+```
+
+The deterministic test backend can be enabled explicitly:
+
+```powershell
+$env:LEGACY_PILOT_SEMANTIC_BACKEND='mock'
+$env:LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP='0.7'
+```
+
+Semantic nodes are LCMS graph nodes with `type="Function Semantic Summary"`.
+They are always evidence-backed with `source_type="llm_semantic_summary"`,
+`extraction_method="llm"`, `verification_status="pending"`, and confidence no
+higher than `LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP`.
+
+Semantic nodes are not trusted structural facts and do not replace GitNexus
+structural nodes or SQL/config/exception enrichers. `ollama` and `qwen_api`
+are reserved backend names; Milestone4 verifies only `disabled` and `mock`.
+
 ## Run The API
 
 ```bash
