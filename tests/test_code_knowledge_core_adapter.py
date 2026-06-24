@@ -434,6 +434,97 @@ class TestGitNexusCliAdapter:
         assert saved["payload"]["repo_id"] == "repo-store"
         assert saved["payload"]["graph_id"] == "GRAPH-repo-store"
 
+    def test_gitnexus_adapter_loads_persisted_payload_when_local_cache_misses(self):
+        persisted_payload = {
+            "repo_id": "repo-store",
+            "graph_id": "GRAPH-repo-store",
+            "trace_id": "TRACE-INDEX-repo-store",
+            "nodes": [
+                {
+                    "id": "Method:DatasetService.getVersion",
+                    "type": "Method",
+                    "name": "DatasetService.getVersion",
+                    "qualifiedName": "DatasetService.getVersion",
+                    "filePath": "src/main/java/DatasetService.java",
+                    "startLine": 1,
+                    "endLine": 10,
+                    "source_type": "code",
+                    "extraction_method": "java_parser",
+                    "confidence": 0.9,
+                },
+                {
+                    "id": "SQL:selectVersionById",
+                    "type": "SQL",
+                    "name": "selectVersionById",
+                    "source_type": "sql",
+                    "extraction_method": "regex",
+                    "confidence": 0.86,
+                },
+                {
+                    "id": "Table:dataset_version",
+                    "type": "Table",
+                    "name": "dataset_version",
+                    "source_type": "sql",
+                    "extraction_method": "regex",
+                    "confidence": 0.84,
+                },
+            ],
+            "relationships": [
+                {
+                    "id": "R1",
+                    "source_id": "Method:DatasetService.getVersion",
+                    "target_id": "SQL:selectVersionById",
+                    "type": "EXECUTES_SQL",
+                    "source_type": "sql",
+                    "extraction_method": "regex",
+                    "confidence": 0.86,
+                },
+                {
+                    "id": "R2",
+                    "source_id": "SQL:selectVersionById",
+                    "target_id": "Table:dataset_version",
+                    "type": "READS_TABLE",
+                    "source_type": "sql",
+                    "extraction_method": "regex",
+                    "confidence": 0.84,
+                },
+            ],
+        }
+        graph_store = RecordingGraphStore(payload_to_load=persisted_payload)
+        client = FakeGitNexusClient()
+        adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+            client=client,
+            graph_store=graph_store,
+        )
+
+        context = adapter.query_graph(
+            GraphQuery(
+                repo_id="repo-store",
+                graph_id="GRAPH-repo-store",
+                query_terms=["dataset_version"],
+                node_filters=["Table"],
+                edge_filters=["READS_TABLE"],
+                max_depth=4,
+                trace_id="TRACE-Q-STORE",
+                contract_version="1.0.0",
+            )
+        )
+
+        assert graph_store.load_calls == [
+            {"repo_id": "repo-store", "graph_id": "GRAPH-repo-store"}
+        ]
+        assert client.query_called is False
+        assert any(
+            node.node_id == "Table:dataset_version" for node in context.matched_nodes
+        )
+        assert context.graph_paths == [
+            [
+                "DatasetService.getVersion",
+                "selectVersionById",
+                "dataset_version",
+            ]
+        ]
+
     def test_index_repo_maps_client_payload_to_graph_snapshot(self):
         client = FakeGitNexusClient()
         adapter = GitNexusCliCodeKnowledgeCoreAdapter(

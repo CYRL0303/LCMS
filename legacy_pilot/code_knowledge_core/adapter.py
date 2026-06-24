@@ -329,9 +329,35 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
                 now=self._now,
             )
 
+        restored_payload = self._load_persisted_payload(query)
+        if restored_payload is not None:
+            self._local_indexes[(query.repo_id, query.graph_id)] = (
+                LocalGraphIndex.from_payload(restored_payload)
+            )
+            local_payload = self._query_local_index(query)
+            if local_payload is not None and local_payload.get("not_found") is not True:
+                return map_query_payload(
+                    self._with_query_enrichers(local_payload, query),
+                    query=query,
+                    now=self._now,
+                )
+
         payload = self._client.query_graph(query)
         payload = self._with_query_enrichers(payload, query)
         return map_query_payload(payload, query=query, now=self._now)
+
+    def _load_persisted_payload(self, query: GraphQuery) -> dict[str, Any] | None:
+        try:
+            return self._graph_store.load_payload(
+                repo_id=query.repo_id,
+                graph_id=query.graph_id,
+            )
+        except GraphStoreError as exc:
+            raise QueryError(
+                exc.message,
+                recoverable=True,
+                diagnostics=exc.diagnostics,
+            ) from exc
 
     def _query_local_index(self, query: GraphQuery) -> dict[str, Any] | None:
         plan = plan_graph_query(query)
