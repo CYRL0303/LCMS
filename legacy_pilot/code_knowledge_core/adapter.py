@@ -25,6 +25,11 @@ from legacy_pilot.code_knowledge_core.gitnexus_mapper import (
     map_index_payload,
     map_query_payload,
 )
+from legacy_pilot.code_knowledge_core.graph_store import (
+    GraphStore,
+    GraphStoreError,
+    create_graph_store,
+)
 from legacy_pilot.code_knowledge_core.local_graph_index import LocalGraphIndex
 from legacy_pilot.code_knowledge_core.query_planner import plan_graph_query
 from legacy_pilot.code_knowledge_core.semantic import (
@@ -248,9 +253,11 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
         ] | None = None,
         query_enrichers: list[Callable[[GraphQuery], dict[str, Any]]] | None = None,
         semantic_enricher: SemanticEnricher | None = None,
+        graph_store: GraphStore | None = None,
     ):
         self._client = client or GitNexusCliClient()
         self._now = now or (lambda: datetime.now(UTC))
+        self._graph_store = graph_store or create_graph_store(now=self._now)
         uses_default_index_enrichers = index_enrichers is None
         self._index_enrichers = (
             index_enrichers
@@ -282,10 +289,36 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
                 parser_version=self._index_parser_version,
             )
         payload = _with_semantic_enrichment(payload, self._semantic_enricher)
-        self._local_indexes[
-            (request.repo_id, _payload_graph_id(payload, request.repo_id))
-        ] = LocalGraphIndex.from_payload(payload)
+        graph_id = _payload_graph_id(payload, request.repo_id)
+        self._save_persisted_payload(
+            repo_id=request.repo_id,
+            graph_id=graph_id,
+            payload=payload,
+        )
+        self._local_indexes[(request.repo_id, graph_id)] = LocalGraphIndex.from_payload(
+            payload
+        )
         return map_index_payload(payload, now=self._now)
+
+    def _save_persisted_payload(
+        self,
+        *,
+        repo_id: str,
+        graph_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        try:
+            self._graph_store.save_payload(
+                repo_id=repo_id,
+                graph_id=graph_id,
+                payload=payload,
+            )
+        except GraphStoreError as exc:
+            raise IndexingError(
+                exc.message,
+                recoverable=True,
+                diagnostics=exc.diagnostics,
+            ) from exc
 
     def query_graph(self, query: GraphQuery) -> GraphContext:
         local_payload = self._query_local_index(query)

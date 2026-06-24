@@ -15,6 +15,7 @@ from legacy_pilot.code_knowledge_core.errors import (
     IndexingError,
     QueryError,
 )
+from legacy_pilot.code_knowledge_core.graph_store import DisabledGraphStore
 from legacy_pilot.contracts.enums import ExtractionMethod, SourceType
 from legacy_pilot.contracts.models import (
     Edge,
@@ -359,7 +360,80 @@ class FakeGitNexusClient:
         }
 
 
+class RecordingGraphStore(DisabledGraphStore):
+    def __init__(self, payload_to_load=None):
+        self.saved_payloads = []
+        self.payload_to_load = payload_to_load
+        self.load_calls = []
+
+    def save_payload(self, *, repo_id, graph_id, payload):
+        self.saved_payloads.append(
+            {"repo_id": repo_id, "graph_id": graph_id, "payload": payload}
+        )
+
+    def load_payload(self, *, repo_id, graph_id):
+        self.load_calls.append({"repo_id": repo_id, "graph_id": graph_id})
+        return self.payload_to_load
+
+
+class PersistenceFakeGitNexusClient:
+    def index_repo(self, request):
+        return {
+            "repo_id": request.repo_id,
+            "graph_id": f"GRAPH-{request.repo_id}",
+            "trace_id": f"TRACE-INDEX-{request.repo_id}",
+            "nodes": [
+                {
+                    "id": "Method:src/main/java/DatasetService.java:DatasetService.getVersion#1",
+                    "type": "Method",
+                    "name": "getVersion",
+                    "filePath": "src/main/java/DatasetService.java",
+                    "startLine": 1,
+                    "endLine": 10,
+                    "source_type": "code",
+                    "extraction_method": "java_parser",
+                    "confidence": 0.9,
+                    "properties": {"qualifiedName": "DatasetService.getVersion"},
+                }
+            ],
+            "relationships": [],
+        }
+
+    def query_graph(self, query):
+        return {
+            "graph_id": query.graph_id,
+            "nodes": [],
+            "relationships": [],
+            "paths": [],
+            "not_found": True,
+        }
+
+
 class TestGitNexusCliAdapter:
+    def test_gitnexus_adapter_saves_enriched_payload_to_graph_store(self):
+        graph_store = RecordingGraphStore()
+        adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+            client=PersistenceFakeGitNexusClient(),
+            graph_store=graph_store,
+        )
+        request = RepoIndexRequest(
+            repo_id="repo-store",
+            repo_uri="file:///repo-store",
+            language_hint="java",
+            parser_profile="spring-boot",
+            contract_version="1.0.0",
+        )
+
+        snapshot = adapter.index_repo(request)
+
+        assert snapshot.graph_id == "GRAPH-repo-store"
+        assert graph_store.saved_payloads
+        saved = graph_store.saved_payloads[0]
+        assert saved["repo_id"] == "repo-store"
+        assert saved["graph_id"] == "GRAPH-repo-store"
+        assert saved["payload"]["repo_id"] == "repo-store"
+        assert saved["payload"]["graph_id"] == "GRAPH-repo-store"
+
     def test_index_repo_maps_client_payload_to_graph_snapshot(self):
         client = FakeGitNexusClient()
         adapter = GitNexusCliCodeKnowledgeCoreAdapter(
