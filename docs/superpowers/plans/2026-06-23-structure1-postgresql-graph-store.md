@@ -4,7 +4,7 @@
 
 **Goal:** Persist Structure 1 enriched graph payloads in PostgreSQL so `QueryGraph` can recover Java/Spring/MyBatis SQL, config, exception, endpoint, and method context after process restart.
 
-**Architecture:** Keep `MiddlewareRouter` as the contract gate and keep `CodeKnowledgeCoreAdapter` as the only Structure 1 boundary. Add a PostgreSQL-backed `GraphStore` inside `legacy_pilot/code_knowledge_core`; `index_repo()` writes the normalized and enriched mapper-ready payload, while `query_graph()` loads it on local cache misses and rebuilds `LocalGraphIndex`. Other structures never connect to PostgreSQL directly and continue to use `QueryGraph -> GraphContext`.
+**Architecture:** Keep `MiddlewareRouter` as the contract gate and keep `CodeKnowledgeCoreAdapter` as the only Structure 1 boundary. Add a PostgreSQL-backed `GraphStore` inside `legacy_pilot/code_knowledge_core`; `index_repo()` writes the normalized and enriched mapper-ready payload, while `query_graph()` loads it only when the planned query is locally queryable and the current process has no `LocalGraphIndex` for `(repo_id, graph_id)`. Other structures never connect to PostgreSQL directly and continue to use `QueryGraph -> GraphContext`.
 
 **Tech Stack:** Python 3.13, Pydantic 2, FastAPI, PostgreSQL, `psycopg[binary]`, pytest.
 
@@ -25,7 +25,7 @@
 - Create `legacy_pilot/code_knowledge_core/graph_store.py`
   Holds graph store interfaces, disabled store, PostgreSQL store, payload hashing, env-driven factory, and graph store errors.
 - Modify `legacy_pilot/code_knowledge_core/adapter.py`
-  Inject graph store into `GitNexusCliCodeKnowledgeCoreAdapter`, save enriched payload after index, and load persisted payload on local index cache miss.
+  Inject graph store into `GitNexusCliCodeKnowledgeCoreAdapter`, save enriched payload after index, and load persisted payload only for locally queryable plans with no process-local index.
 - Modify `legacy_pilot/code_knowledge_core/__init__.py`
   Export graph store types and factory where useful for tests and future adapter construction.
 - Modify `pyproject.toml`
@@ -946,7 +946,7 @@ Run:
 python -m pytest tests/test_code_knowledge_core_adapter.py::test_gitnexus_adapter_loads_persisted_payload_when_local_cache_misses -q
 ```
 
-Expected: FAIL because `query_graph()` does not consult graph store on local cache miss.
+Expected: FAIL because `query_graph()` does not consult graph store when a locally queryable request has no process-local index.
 
 - [ ] **Step 3: Add persisted payload load path**
 
@@ -954,7 +954,8 @@ In `legacy_pilot/code_knowledge_core/adapter.py`, update `query_graph()`:
 
 ```python
 def query_graph(self, query: GraphQuery) -> GraphContext:
-    local_payload = self._query_local_index(query)
+    plan = plan_graph_query(query)
+    local_payload = self._query_local_index(query, plan=plan)
     if local_payload is not None and local_payload.get("not_found") is not True:
         return map_query_payload(
             self._with_query_enrichers(local_payload, query),
@@ -962,18 +963,19 @@ def query_graph(self, query: GraphQuery) -> GraphContext:
             now=self._now,
         )
 
-    restored_payload = self._load_persisted_payload(query)
-    if restored_payload is not None:
-        self._local_indexes[(query.repo_id, query.graph_id)] = LocalGraphIndex.from_payload(
-            restored_payload
-        )
-        local_payload = self._query_local_index(query)
-        if local_payload is not None and local_payload.get("not_found") is not True:
-            return map_query_payload(
-                self._with_query_enrichers(local_payload, query),
-                query=query,
-                now=self._now,
+    if local_payload is None and self._should_restore_persisted_payload(query, plan):
+        restored_payload = self._load_persisted_payload(query)
+        if restored_payload is not None:
+            self._local_indexes[(query.repo_id, query.graph_id)] = (
+                LocalGraphIndex.from_payload(restored_payload)
             )
+            local_payload = self._query_local_index(query, plan=plan)
+            if local_payload is not None and local_payload.get("not_found") is not True:
+                return map_query_payload(
+                    self._with_query_enrichers(local_payload, query),
+                    query=query,
+                    now=self._now,
+                )
 
     payload = self._client.query_graph(query)
     payload = self._with_query_enrichers(payload, query)
@@ -995,6 +997,16 @@ def _load_persisted_payload(self, query: GraphQuery) -> dict[str, Any] | None:
             recoverable=True,
             diagnostics=exc.diagnostics,
         ) from exc
+
+
+def _should_restore_persisted_payload(
+    self,
+    query: GraphQuery,
+    plan: GraphQueryPlan,
+) -> bool:
+    if not _is_local_queryable_plan(plan):
+        return False
+    return (query.repo_id, query.graph_id) not in self._local_indexes
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1152,10 +1164,10 @@ $env:LEGACY_PILOT_GRAPH_STORE_TABLE='legacy_pilot_graph_payloads'
 ```
 
 `IndexRepo` persists the normalized and enriched mapper-ready graph payload.
-`QueryGraph` first checks the in-process `LocalGraphIndex`, then reloads the
-payload from PostgreSQL and rebuilds the local index on cache miss. Other
-LegacyPilot structures must not connect to this database directly; they still
-use `/v1/graph/query`.
+`QueryGraph` first checks the in-process `LocalGraphIndex`; for locally
+queryable plans with no process-local index, it reloads the payload from
+PostgreSQL and rebuilds the local index. Other LegacyPilot structures must not
+connect to this database directly; they still use `/v1/graph/query`.
 ```
 ````
 
@@ -1187,7 +1199,7 @@ Spec coverage:
 - PostgreSQL graph store is inside Structure 1 and not a cross-structure database: covered by Tasks 2, 3, 5.
 - Existing middleware contract stays unchanged: covered by adapter-only changes in Tasks 3 and 4.
 - Persist latest enriched payload, not raw GitNexus payload: covered by Task 3 save position after enrichment and semantic enrichment.
-- Restore query after local cache miss: covered by Task 4.
+- Restore query only for locally queryable plans with no process-local index: covered by Task 4 and final review fix.
 - Default tests remain compatible without PostgreSQL: covered by disabled default store in Task 2 and skipped integration in Task 5.
 
 Red flag scan:
