@@ -194,10 +194,16 @@ $env:LEGACY_PILOT_GRAPH_STORE_TABLE='legacy_pilot_graph_payloads'
 ```
 
 `IndexRepo` persists the normalized and enriched mapper-ready graph payload.
-`QueryGraph` first checks the in-process `LocalGraphIndex`, then reloads the
-payload from PostgreSQL and rebuilds the local index on cache miss. Other
-LegacyPilot structures must not connect to this database directly; they still
-use `/v1/graph/query`.
+`QueryGraph` first checks the in-process `LocalGraphIndex`; for locally
+queryable plans with no process-local index, it reloads the payload from
+PostgreSQL and rebuilds the local index. Other LegacyPilot structures must not
+connect to this database directly; they still use `/v1/graph/query`.
+
+The real PostgreSQL integration test is opt-in. Set
+`LEGACY_PILOT_RUN_POSTGRES_GRAPH_STORE=1` and
+`LEGACY_PILOT_GRAPH_STORE_DSN`; optionally set
+`LEGACY_PILOT_GRAPH_STORE_TEST_TABLE` to isolate test writes from the default
+graph-store table.
 
 ## Run The API
 

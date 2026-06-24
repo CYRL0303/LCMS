@@ -4,6 +4,7 @@ import pytest
 
 from legacy_pilot.code_knowledge_core.graph_store import (
     DisabledGraphStore,
+    GraphStoreError,
     PostgresGraphStore,
     create_graph_store,
     payload_hash,
@@ -131,8 +132,12 @@ def test_create_graph_store_rejects_unsafe_postgresql_table_name(monkeypatch):
         "legacy_pilot_graph_payloads; DROP TABLE users",
     )
 
-    with pytest.raises(ValueError, match="safe SQL identifier"):
+    with pytest.raises(GraphStoreError, match="safe SQL identifier") as excinfo:
         create_graph_store()
+
+    assert excinfo.value.diagnostics == {
+        "table_name": "legacy_pilot_graph_payloads; DROP TABLE users"
+    }
 
 
 def test_postgres_graph_store_loads_payload():

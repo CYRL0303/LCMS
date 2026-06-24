@@ -31,7 +31,10 @@ from legacy_pilot.code_knowledge_core.graph_store import (
     create_graph_store,
 )
 from legacy_pilot.code_knowledge_core.local_graph_index import LocalGraphIndex
-from legacy_pilot.code_knowledge_core.query_planner import plan_graph_query
+from legacy_pilot.code_knowledge_core.query_planner import (
+    GraphQueryPlan,
+    plan_graph_query,
+)
 from legacy_pilot.code_knowledge_core.semantic import (
     DisabledSemanticEnricher,
     SemanticEnricher,
@@ -54,6 +57,16 @@ DEFAULT_STRUCTURE1_ENRICHMENT_SOURCES = [
     "java_config",
     "java_exception",
 ]
+LOCAL_QUERYABLE_PLAN_KINDS = frozenset(
+    {
+        "route_context",
+        "symbol_context",
+        "sql",
+        "config",
+        "exception",
+        "keyword",
+    }
+)
 
 
 class CodeKnowledgeCoreAdapter(ABC):
@@ -321,7 +334,8 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
             ) from exc
 
     def query_graph(self, query: GraphQuery) -> GraphContext:
-        local_payload = self._query_local_index(query)
+        plan = plan_graph_query(query)
+        local_payload = self._query_local_index(query, plan=plan)
         if local_payload is not None and local_payload.get("not_found") is not True:
             return map_query_payload(
                 self._with_query_enrichers(local_payload, query),
@@ -329,18 +343,25 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
                 now=self._now,
             )
 
-        restored_payload = self._load_persisted_payload(query)
-        if restored_payload is not None:
-            self._local_indexes[(query.repo_id, query.graph_id)] = (
-                LocalGraphIndex.from_payload(restored_payload)
-            )
-            local_payload = self._query_local_index(query)
-            if local_payload is not None and local_payload.get("not_found") is not True:
-                return map_query_payload(
-                    self._with_query_enrichers(local_payload, query),
-                    query=query,
-                    now=self._now,
+        if local_payload is None and self._should_restore_persisted_payload(
+            query,
+            plan,
+        ):
+            restored_payload = self._load_persisted_payload(query)
+            if restored_payload is not None:
+                self._local_indexes[(query.repo_id, query.graph_id)] = (
+                    LocalGraphIndex.from_payload(restored_payload)
                 )
+                local_payload = self._query_local_index(query, plan=plan)
+                if (
+                    local_payload is not None
+                    and local_payload.get("not_found") is not True
+                ):
+                    return map_query_payload(
+                        self._with_query_enrichers(local_payload, query),
+                        query=query,
+                        now=self._now,
+                    )
 
         payload = self._client.query_graph(query)
         payload = self._with_query_enrichers(payload, query)
@@ -359,16 +380,23 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
                 diagnostics=exc.diagnostics,
             ) from exc
 
-    def _query_local_index(self, query: GraphQuery) -> dict[str, Any] | None:
-        plan = plan_graph_query(query)
-        if plan.kind not in {
-            "route_context",
-            "symbol_context",
-            "sql",
-            "config",
-            "exception",
-            "keyword",
-        }:
+    def _should_restore_persisted_payload(
+        self,
+        query: GraphQuery,
+        plan: GraphQueryPlan,
+    ) -> bool:
+        if not _is_local_queryable_plan(plan):
+            return False
+        return (query.repo_id, query.graph_id) not in self._local_indexes
+
+    def _query_local_index(
+        self,
+        query: GraphQuery,
+        *,
+        plan: GraphQueryPlan | None = None,
+    ) -> dict[str, Any] | None:
+        plan = plan or plan_graph_query(query)
+        if not _is_local_queryable_plan(plan):
             return None
         index = self._local_indexes.get((query.repo_id, query.graph_id))
         if index is None:
@@ -430,6 +458,10 @@ def _default_structure1_enrichers() -> list[Callable[[RepoIndexRequest], dict[st
         _extract_java_config_for_request,
         _extract_java_exception_for_request,
     ]
+
+
+def _is_local_queryable_plan(plan: GraphQueryPlan) -> bool:
+    return plan.kind in LOCAL_QUERYABLE_PLAN_KINDS
 
 
 def _with_enrichment_metadata(

@@ -240,9 +240,10 @@ def _psycopg_connect(dsn: str) -> Any:
 
 def _safe_sql_identifier(identifier: str) -> str:
     if not _SQL_IDENTIFIER_RE.fullmatch(identifier):
-        raise ValueError(
+        raise GraphStoreError(
             "PostgreSQL graph store table name must be a safe SQL identifier "
-            "matching [A-Za-z_][A-Za-z0-9_]{0,62}."
+            "matching [A-Za-z_][A-Za-z0-9_]{0,62}.",
+            diagnostics={"table_name": identifier},
         )
     return identifier
 
