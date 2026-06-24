@@ -11,6 +11,7 @@ from legacy_pilot.contracts.models import (
     EvidenceRef,
     GraphSnapshot,
     GraphQuery,
+    IncidentQuery,
     RCAReport,
 )
 from legacy_pilot.contracts.validators import ensure_supported_contract_version, ensure_trace_id
@@ -148,6 +149,35 @@ def test_alert_event_accepts_contract_version_and_required_fields():
     )
 
     assert alert.contract_version == "1.0.0"
+
+
+def test_alert_event_accepts_optional_graph_id():
+    alert = AlertEvent(
+        alert_id="ALERT-001",
+        repo_id="repo-demo",
+        graph_id="GRAPH-repo-demo",
+        raw_log="java.lang.NullPointerException at DatasetService.getVersion",
+        stack_trace="DatasetService.getVersion(DatasetService.java:42)",
+        error_description="NPE while reading dataset version",
+        occurred_at=datetime(2026, 6, 24, tzinfo=UTC),
+        source="demo-cli",
+        contract_version="1.0.0",
+    )
+
+    assert alert.graph_id == "GRAPH-repo-demo"
+
+
+def test_incident_query_accepts_missing_graph_id_for_compatibility():
+    query = IncidentQuery(
+        trace_id="TRACE-ALERT-001",
+        repo_id="repo-demo",
+        error_type="NullPointerException",
+        suspected_location="DatasetService.getVersion",
+        query_terms=["NullPointerException", "DatasetService.getVersion"],
+        contract_version="1.0.0",
+    )
+
+    assert query.graph_id is None
 
 
 def test_graph_snapshot_accepts_structure1_versions():

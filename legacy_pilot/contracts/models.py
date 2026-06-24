@@ -115,6 +115,7 @@ class GraphContext(ContractModel):
 class AlertEvent(ContractModel):
     alert_id: str
     repo_id: str
+    graph_id: str | None = None
     raw_log: str
     stack_trace: str | None = None
     error_description: str | None = None
@@ -126,6 +127,7 @@ class AlertEvent(ContractModel):
 class IncidentQuery(ContractModel):
     trace_id: str
     repo_id: str
+    graph_id: str | None = None
     error_type: str
     suspected_location: str | None = None
     endpoint: str | None = None
