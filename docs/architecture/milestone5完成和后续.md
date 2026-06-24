@@ -18,7 +18,8 @@ RepoIndexRequest
 
 已验证结果：
 
-- 默认测试：141 passed, 6 skipped
+- 默认测试：150 passed, 7 skipped
+- PostgreSQL graph store 默认 profile：7 passed, 1 skipped
 - 真实 GitNexus opt-in：12 passed
 - 真实 Qwen semantic opt-in：1 passed
 - middleware/router 四结构契约边界未改变
@@ -70,6 +71,23 @@ MyBatis XML 是通过结构1 enrichment 补的，不是 GitNexus 当前原生稳
 
 非 Java 文件不会必然导致失败，但当前不承诺解析质量。只有 GitNexus 恰好输出通用节点时，mapper 才能归一化接收；结构1没有针对这些语言的生产级测试。
 
+## PostgreSQL Graph Store 持久化
+
+结构1现在支持 opt-in PostgreSQL graph store。默认状态仍是 `disabled`，默认测试和本地开发不需要 PostgreSQL。
+
+已实现行为：
+
+- `IndexRepo` 在 GitNexus payload normalization、结构1 enrichment、semantic enrichment 之后保存 mapper-ready graph payload。
+- `QueryGraph` 先查进程内 `LocalGraphIndex`；本地缓存 miss 时，从 PostgreSQL 加载 payload 并重建本地 index。
+- PostgreSQL 表名经过 safe SQL identifier 校验，默认表名是 `legacy_pilot_graph_payloads`。
+- 真实 PostgreSQL 覆盖通过 `LEGACY_PILOT_RUN_POSTGRES_GRAPH_STORE=1` 和 `LEGACY_PILOT_GRAPH_STORE_DSN` opt-in 运行。
+
+边界：
+
+- PostgreSQL graph store 只属于结构1内部持久化，不是四结构共享数据库。
+- 其他结构不能直接连接该数据库，仍必须通过 middleware 的 `/v1/graph/query` 契约访问结构1能力。
+- 持久化内容是 enriched mapper-ready payload，不是暴露 GitNexus raw payload。
+
 ## 能力边界
 
 当前 Milestone5 不是全语言代码知识图谱，而是结构1 Java 生产链路闭环。
@@ -82,6 +100,7 @@ MyBatis XML 是通过结构1 enrichment 补的，不是 GitNexus 当前原生稳
 - 不做 trace/impact 全能力封装，只做当前结构1 query context。
 - semantic enrichment 只是辅助摘要，不作为可信结构事实。
 - GitNexus raw payload 不暴露给 middleware 或其他三结构。
+- PostgreSQL graph store 不作为跨结构数据库边界，只作为结构1 cache/restore 持久化。
 
 ## 留出的开发接口
 

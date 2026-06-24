@@ -35,6 +35,9 @@ contract boundary:
 - Milestone5: production hardening validates local repo paths before GitNexus
   analyze, supports stable-index reuse, separates index/query timeouts, and
   documents default/integration CI profiles.
+- Structure 1 graph persistence is disabled by default, supports opt-in
+  PostgreSQL payload storage, and restores `QueryGraph` from PostgreSQL on a
+  local cache miss.
 - Production fixture coverage proves `/api/dataset/version -> controller ->
   service -> mapper -> Mapper XML SQL -> dataset_version`, plus config and
   exception evidence.
@@ -45,8 +48,9 @@ contract boundary:
 Latest local verification:
 
 ```text
-Default suite: 141 passed, 6 skipped, 1 warning
+Default suite: 150 passed, 7 skipped, 1 warning
 Structure 1 production fixture: 5 passed, 2 skipped
+PostgreSQL graph store default profile: 7 passed, 1 skipped
 Real GitNexus opt-in suite: 12 passed
 Real Qwen semantic opt-in test: 1 passed, 2 pytest cache warnings
 ```
@@ -178,6 +182,22 @@ Semantic nodes are not trusted structural facts and do not replace GitNexus
 structural nodes or SQL/config/exception enrichers. The real LLM backend for
 Structure 1 coverage is `qwen_api` through the OpenAI-compatible DashScope Chat
 API; no `ollama` backend is part of the current acceptance path.
+
+### Structure 1 PostgreSQL Graph Store
+
+Graph persistence is disabled by default. Enable it only for Structure 1:
+
+```powershell
+$env:LEGACY_PILOT_GRAPH_STORE_BACKEND='postgresql'
+$env:LEGACY_PILOT_GRAPH_STORE_DSN='postgresql://legacy_pilot:legacy_pilot@127.0.0.1:5432/legacy_pilot'
+$env:LEGACY_PILOT_GRAPH_STORE_TABLE='legacy_pilot_graph_payloads'
+```
+
+`IndexRepo` persists the normalized and enriched mapper-ready graph payload.
+`QueryGraph` first checks the in-process `LocalGraphIndex`, then reloads the
+payload from PostgreSQL and rebuilds the local index on cache miss. Other
+LegacyPilot structures must not connect to this database directly; they still
+use `/v1/graph/query`.
 
 ## Run The API
 
