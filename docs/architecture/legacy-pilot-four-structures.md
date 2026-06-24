@@ -16,6 +16,8 @@ legacy repo + 报警/日志
 
 为了降低 MVP 复杂度，系统先拆成 4 个尽量原子的结构。每个结构只负责一个核心问题，并通过中间件定义的标准接口通信。
 
+结构 1 已支持自己的后端持久 graph 存储，用于保存已归一化和增强后的代码图谱。该存储不是给其他结构直接访问的共享数据库；其他结构如果需要代码图谱，仍然只能通过 Interface Contract Middleware 调用 `QueryGraph`。
+
 ## 2. 总体结构
 
 ```text
@@ -29,6 +31,13 @@ legacy repo + 报警/日志
 | Code Knowledge |      | Incident Context |      | RCA Reasoning  |
 | Core           |      | Builder          |      | Engine         |
 +-------+--------+      +--------+---------+      +-------+--------+
+        |
+        v
++-------+--------+
+| Persistent     |
+| Graph Store    |
+| PostgreSQL     |
++----------------+
         |                        |                        |
         +------------------------+------------------------+
                                  |
@@ -132,6 +141,47 @@ AFFECTS_MIGRATION
 如果一个需求是在问“这个 repo 里有什么结构、调用、SQL、配置、异常、证据”，它属于 Code Knowledge Core。
 
 如果一个需求是在问“这次事故为什么发生”，它不属于 Code Knowledge Core。
+
+### 3.9 后端持久 Graph Store
+
+结构 1 的持久 graph 存储用于保存 `IndexRepo` 生成的 mapper-ready graph payload，包括 GitNexus 基础图、Structure 1 enrichment 产物、语义增强元数据和 evidence 引用。当前实现的后端为 PostgreSQL，默认关闭，只有显式配置 `LEGACY_PILOT_GRAPH_STORE_BACKEND=postgresql` 和 DSN 后启用。
+
+持久存储的目标不是替代 `GraphSnapshot` / `GraphContext` 契约，而是让结构 1 在服务重启、进程切换或后续结构查询时仍能恢复已增强图谱，避免 SQL/config/exception 等本地 enrichment 查询能力只存在进程内。
+
+负责的事情：
+
+- 保存按 `repo_id`、`graph_id` 标识的最新归一化 graph payload。
+- 保存 graph 元数据，例如 `parser_version`、`semantic_enrichment_version`、`payload_hash`、创建时间和更新时间。
+- 支持本地可查询的 `QueryGraph` 在没有进程内 `LocalGraphIndex` 时按 `repo_id` / `graph_id` 取回 payload，并重建本地查询索引。
+- 支持 latest graph upsert，保证同一个 repo 的最新索引可被稳定查询。
+
+不负责的事情：
+
+- 不对外暴露 PostgreSQL 表结构。
+- 不允许 Incident Context Builder、RCA Reasoning Engine 或 Incident Memory & Report Store 直接连接数据库。
+- 不直接生成 RCA 证据包、根因结论或 incident memory。
+- 不把 GitNexus raw payload 暴露给 middleware 或其他结构。
+- 不在当前版本维护 graph 历史版本。
+
+边界规则：
+
+```text
+IndexRepo
+-> Middleware contract gate
+-> Code Knowledge Core
+-> GitNexus + Structure 1 enrichment
+-> Persistent Graph Store write
+-> GraphSnapshot
+
+QueryGraph
+-> Middleware contract gate
+-> Code Knowledge Core
+-> in-memory LocalGraphIndex
+-> Persistent Graph Store read only when a locally queryable plan has no process-local index
+-> GraphContext
+```
+
+其他结构只能看到 `GraphSnapshot`、`GraphContext`、`Node`、`Edge` 和 `EvidenceRef`。如果未来把 Persistent Graph Store 提升成独立结构，它也必须只通过中间件暴露受控接口，不能成为跨结构共享内部对象的通道。
 
 ## 4. Structure 2: Incident Context Builder
 
@@ -382,4 +432,3 @@ P2. 补充多语言 adapter 和更多 demo case
 - LLM 生成的语义边默认是待验证信息，必须有 confidence 和 evidence_span。
 - MVP 只承诺 Java / Spring Boot 闭环，多语言作为 adapter 能力预留。
 - 迁移能力只输出风险、影响范围和 checklist，不自动迁移生产代码。
-

@@ -78,7 +78,7 @@ MyBatis XML 是通过结构1 enrichment 补的，不是 GitNexus 当前原生稳
 已实现行为：
 
 - `IndexRepo` 在 GitNexus payload normalization、结构1 enrichment、semantic enrichment 之后保存 mapper-ready graph payload。
-- `QueryGraph` 先查进程内 `LocalGraphIndex`；本地缓存 miss 时，从 PostgreSQL 加载 payload 并重建本地 index。
+- `QueryGraph` 先查进程内 `LocalGraphIndex`；只有本地可查询的 plan 且当前进程没有对应 index 时，才从 PostgreSQL 加载 payload 并重建本地 index。
 - PostgreSQL 表名经过 safe SQL identifier 校验，默认表名是 `legacy_pilot_graph_payloads`。
 - 真实 PostgreSQL 覆盖通过 `LEGACY_PILOT_RUN_POSTGRES_GRAPH_STORE=1` 和 `LEGACY_PILOT_GRAPH_STORE_DSN` opt-in 运行。
 

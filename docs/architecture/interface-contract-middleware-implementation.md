@@ -35,6 +35,9 @@ legacy_pilot/
   middleware/
     app.py          # FastAPI app、HTTP 路由、异常处理器
     router.py       # mock middleware router 和首版闭环
+  code_knowledge_core/
+    adapter.py       # Structure 1 adapter 边界，负责 IndexRepo / QueryGraph
+    graph_store.py   # PostgreSQL-backed graph persistence 层，默认 disabled
 ```
 
 测试覆盖在：
@@ -338,6 +341,32 @@ Code Knowledge Core 必须输出：
 - Edge 必须至少有一个 evidence_ref。
 - parser/tree-sitter/JavaParser 产生的结构事实应使用高 confidence。
 - LLM 产生的语义边必须走 `LLMSemanticResult` 或等价字段，保留 evidence span、prompt_version、confidence 和 verification_status。
+- Structure 1 可以使用 PostgreSQL 持久化 mapper-ready graph payload，但 PostgreSQL 表结构不得成为跨结构 contract。
+- Incident Context Builder、RCA Reasoning Engine 和 Incident Memory & Report Store 不能直接连接 PostgreSQL graph store；它们只能通过 `QueryGraph` 获得 `GraphContext`。
+
+已实现的 PostgreSQL-backed graph persistence 边界：
+
+```text
+IndexRepo
+-> MiddlewareRouter.index_repo()
+-> CodeKnowledgeCoreAdapter.index_repo()
+-> GitNexus CLI payload normalization
+-> Structure 1 enrichment
+-> GraphStore.save_payload(repo_id, graph_id, payload)
+-> GraphSnapshot
+```
+
+```text
+QueryGraph
+-> MiddlewareRouter.query_graph()
+-> CodeKnowledgeCoreAdapter.query_graph()
+-> in-memory LocalGraphIndex
+-> GraphStore.load_payload(repo_id, graph_id) only when a locally queryable plan has no process-local index
+-> LocalGraphIndex rebuilt from persisted payload
+-> GraphContext
+```
+
+当前持久化只承诺保存 latest enriched graph payload 并支持重建查询索引，不承诺 graph 历史版本、节点级 SQL 查询接口或跨结构数据库直连。
 
 ### 6.2 Incident Context Builder
 
@@ -446,6 +475,8 @@ MiddlewareRouter
 - rca_reasoning_engine_adapter
 - incident_memory_store_adapter
 ```
+
+Structure 1 的 PostgreSQL graph store 不作为第五个结构直接暴露给其他结构。它通过 `code_knowledge_core_adapter` 被 Code Knowledge Core 使用；如果未来确实需要独立的 Graph Store 结构，也必须经由 MiddlewareRouter 暴露受控请求/响应模型，不能让其他结构共享数据库连接或内部 payload。
 
 中间件仍然保留：
 

@@ -36,8 +36,8 @@ contract boundary:
   analyze, supports stable-index reuse, separates index/query timeouts, and
   documents default/integration CI profiles.
 - Structure 1 graph persistence is disabled by default, supports opt-in
-  PostgreSQL payload storage, and restores `QueryGraph` from PostgreSQL on a
-  local cache miss.
+  PostgreSQL payload storage, and restores `QueryGraph` from PostgreSQL only
+  for locally queryable plans with no process-local index.
 - Production fixture coverage proves `/api/dataset/version -> controller ->
   service -> mapper -> Mapper XML SQL -> dataset_version`, plus config and
   exception evidence.
