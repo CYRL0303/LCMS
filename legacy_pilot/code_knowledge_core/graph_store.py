@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -8,6 +9,7 @@ from typing import Any
 
 
 DEFAULT_GRAPH_STORE_TABLE = "legacy_pilot_graph_payloads"
+_SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 
 class GraphStoreError(Exception):
@@ -67,7 +69,7 @@ class PostgresGraphStore(GraphStore):
         now: Callable[[], datetime] | None = None,
     ):
         self.dsn = dsn
-        self.table_name = table_name
+        self.table_name = _safe_sql_identifier(table_name)
         self._connect = connect or _psycopg_connect
         self._now = now or (lambda: datetime.now(UTC))
 
@@ -234,6 +236,15 @@ def _psycopg_connect(dsn: str) -> Any:
     import psycopg
 
     return psycopg.connect(dsn)
+
+
+def _safe_sql_identifier(identifier: str) -> str:
+    if not _SQL_IDENTIFIER_RE.fullmatch(identifier):
+        raise ValueError(
+            "PostgreSQL graph store table name must be a safe SQL identifier "
+            "matching [A-Za-z_][A-Za-z0-9_]{0,62}."
+        )
+    return identifier
 
 
 def _text_or_none(value: Any) -> str | None:

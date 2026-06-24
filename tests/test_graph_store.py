@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from legacy_pilot.code_knowledge_core.graph_store import (
     DisabledGraphStore,
     PostgresGraphStore,
@@ -91,17 +93,18 @@ class FakeConnector:
 
 def test_postgres_graph_store_upserts_payload_with_metadata():
     connector = FakeConnector()
+    frozen_now = datetime(2026, 6, 23, tzinfo=UTC)
     store = PostgresGraphStore(
         dsn="postgresql://example/db",
         table_name="legacy_pilot_graph_payloads_test",
         connect=connector,
-        now=lambda: datetime(2026, 6, 23, tzinfo=UTC),
+        now=lambda: frozen_now,
     )
     payload = {
         "repo_id": "repo-a",
         "graph_id": "GRAPH-repo-a",
         "parser_version": "gitnexus_cli+structure1_sql_config_exception_v1",
-        "semantic_enrichment_version": None,
+        "semantic_enrichment_version": "qwen-plus+semantic-v1",
         "nodes": [],
         "relationships": [],
     }
@@ -112,6 +115,24 @@ def test_postgres_graph_store_upserts_payload_with_metadata():
     executed_sql = "\n".join(query for query, _ in connector.connections[0][1].executed)
     assert "CREATE TABLE IF NOT EXISTS legacy_pilot_graph_payloads_test" in executed_sql
     assert "ON CONFLICT (repo_id, graph_id) DO UPDATE" in executed_sql
+    insert_params = connector.connections[0][1].executed[1][1]
+    assert insert_params[3] == payload_hash(payload)
+    assert insert_params[4] == "gitnexus_cli+structure1_sql_config_exception_v1"
+    assert insert_params[5] == "qwen-plus+semantic-v1"
+    assert insert_params[6] == frozen_now
+    assert insert_params[7] == frozen_now
+
+
+def test_create_graph_store_rejects_unsafe_postgresql_table_name(monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_GRAPH_STORE_BACKEND", "postgresql")
+    monkeypatch.setenv("LEGACY_PILOT_GRAPH_STORE_DSN", "postgresql://example/db")
+    monkeypatch.setenv(
+        "LEGACY_PILOT_GRAPH_STORE_TABLE",
+        "legacy_pilot_graph_payloads; DROP TABLE users",
+    )
+
+    with pytest.raises(ValueError, match="safe SQL identifier"):
+        create_graph_store()
 
 
 def test_postgres_graph_store_loads_payload():
