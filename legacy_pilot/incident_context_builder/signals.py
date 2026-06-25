@@ -10,6 +10,7 @@ JAVA_FRAME_RE = re.compile(
     r"\((?P<file>[^():]+\.java):(?P<line>\d+)\)"
 )
 ENDPOINT_RE = re.compile(r"(?P<endpoint>/api/[A-Za-z0-9_./{}-]+)")
+SLOW_QUERY_RE = re.compile(r"\bslow\s+query\b", re.IGNORECASE)
 SQL_TABLE_RE = re.compile(
     r"\b(?:from|join|update|into)\s+(?P<table>[A-Za-z_][A-Za-z0-9_]*)\b",
     re.IGNORECASE,
@@ -38,7 +39,7 @@ def parse_alert_event(alert: AlertEvent) -> IncidentSignals:
     )
     error_type = _detect_error_type(text)
     frame = JAVA_FRAME_RE.search(text)
-    endpoint = _first_match(ENDPOINT_RE, text, "endpoint")
+    endpoint = _endpoint_match(text)
     table = _first_match(SQL_TABLE_RE, text, "table")
     suspected_location = None
     file_path = None
@@ -70,9 +71,16 @@ def parse_alert_event(alert: AlertEvent) -> IncidentSignals:
 def _detect_error_type(text: str) -> str:
     if "NullPointerException" in text:
         return "NullPointerException"
-    if "Slow query" in text or "slow query" in text:
+    if SLOW_QUERY_RE.search(text):
         return "SlowQuery"
     return "UnknownError"
+
+
+def _endpoint_match(text: str) -> str | None:
+    endpoint = _first_match(ENDPOINT_RE, text, "endpoint")
+    if endpoint is None:
+        return None
+    return endpoint.rstrip(".,;:!?)\"]}'")
 
 
 def _first_match(pattern: re.Pattern[str], text: str, group_name: str) -> str | None:

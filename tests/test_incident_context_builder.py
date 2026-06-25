@@ -50,3 +50,51 @@ def test_parse_alert_event_extracts_slow_query_signal():
     assert signals.error_type == "SlowQuery"
     assert "dataset_version" in signals.keywords
     assert "dataset_version" in signals.query_terms
+
+
+def test_parse_alert_event_trims_endpoint_trailing_punctuation():
+    signals = parse_alert_event(
+        alert_event(
+            raw_log="NullPointerException at DatasetService.getVersion. Hit /api/dataset/version.",
+            stack_trace="at com.legacy.DatasetService.getVersion(DatasetService.java:42)",
+            error_description="Endpoint /api/dataset/version.",
+        )
+    )
+
+    assert signals.endpoint == "/api/dataset/version"
+    assert signals.query_terms == [
+        "NullPointerException",
+        "DatasetService.getVersion",
+        "/api/dataset/version",
+    ]
+
+
+def test_parse_alert_event_detects_slow_query_case_insensitively():
+    signals = parse_alert_event(
+        alert_event(
+            raw_log="SLOW QUERY detected: select * from dataset_version",
+            stack_trace=None,
+            error_description=None,
+        )
+    )
+
+    assert signals.error_type == "SlowQuery"
+
+
+def test_parse_alert_event_deduplicates_query_terms_in_order():
+    signals = parse_alert_event(
+        alert_event(
+            raw_log=(
+                "Slow query detected: select * from dataset_version "
+                "join dataset_version on dataset_version.id = dataset_version.id"
+            ),
+            stack_trace=None,
+            error_description="Slow query on /api/dataset/version and /api/dataset/version",
+        )
+    )
+
+    assert signals.query_terms == [
+        "SlowQuery",
+        "/api/dataset/version",
+        "dataset_version",
+    ]

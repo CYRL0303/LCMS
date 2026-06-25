@@ -180,6 +180,20 @@ def test_incident_query_accepts_missing_graph_id_for_compatibility():
     assert query.graph_id is None
 
 
+def test_incident_query_accepts_optional_graph_id():
+    query = IncidentQuery(
+        trace_id="TRACE-ALERT-001",
+        repo_id="repo-demo",
+        graph_id="GRAPH-repo-demo",
+        error_type="NullPointerException",
+        suspected_location="DatasetService.getVersion",
+        query_terms=["NullPointerException", "DatasetService.getVersion"],
+        contract_version="1.0.0",
+    )
+
+    assert query.graph_id == "GRAPH-repo-demo"
+
+
 def test_graph_snapshot_accepts_structure1_versions():
     snapshot = GraphSnapshot(
         graph_id="GRAPH-1",
