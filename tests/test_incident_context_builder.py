@@ -9,6 +9,7 @@ from legacy_pilot.contracts.models import (
     Node,
 )
 from legacy_pilot.incident_context_builder.adapter import (
+    GraphBackedIncidentContextBuilderAdapter,
     MockIncidentContextBuilderAdapter,
 )
 from legacy_pilot.incident_context_builder.evidence_builder import (
@@ -247,3 +248,50 @@ def test_build_evidence_bundle_from_graph_context_partitions_evidence():
     assert bundle.sql_evidence == [sql]
     assert bundle.config_evidence == [config]
     assert bundle.missing_evidence == []
+
+
+def test_graph_backed_adapter_queries_graph_and_builds_bundle():
+    calls = []
+    code = evidence_ref("EV-CODE-1", "code")
+
+    def query_graph(graph_query):
+        calls.append(graph_query)
+        return GraphContext(
+            trace_id=graph_query.trace_id,
+            matched_nodes=[
+                Node(
+                    node_id="Method:DatasetService.getVersion",
+                    graph_id=graph_query.graph_id,
+                    repo_id=graph_query.repo_id,
+                    type="Method",
+                    name="DatasetService.getVersion",
+                    evidence_refs=[code],
+                )
+            ],
+            matched_edges=[],
+            graph_paths=[
+                [
+                    "DatasetController.getVersion",
+                    "DatasetService.getVersion",
+                ]
+            ],
+            evidence_refs=[code],
+            confidence=0.88,
+        )
+
+    adapter = GraphBackedIncidentContextBuilderAdapter(
+        query_graph=query_graph,
+        find_similar_incidents=lambda query: [],
+    )
+    query = adapter.submit_alert(alert_event())
+
+    bundle = adapter.build_evidence_bundle(query)
+
+    assert calls[0].graph_id == "GRAPH-repo-demo"
+    assert calls[0].query_terms == [
+        "NullPointerException",
+        "DatasetService.getVersion",
+        "/api/dataset/version",
+    ]
+    assert bundle.matched_nodes[0].name == "DatasetService.getVersion"
+    assert bundle.code_evidence == [code]

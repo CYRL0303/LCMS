@@ -46,7 +46,13 @@ class MiddlewareRouter:
         )
         self._incident_context_builder_adapter = (
             incident_context_builder_adapter
-            or create_incident_context_builder_adapter(now=self._now)
+            or create_incident_context_builder_adapter(
+                now=self._now,
+                query_graph=lambda graph_query: self.query_graph(graph_query),
+                find_similar_incidents=lambda incident_query: self.find_similar_incidents(
+                    incident_query
+                ),
+            )
         )
 
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:

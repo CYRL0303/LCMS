@@ -198,6 +198,16 @@ def test_default_router_uses_mock_incident_context_adapter():
     )
 
 
+def test_router_selects_graph_backed_incident_context_adapter(monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND", "graph_context")
+
+    router = MiddlewareRouter()
+
+    assert router._incident_context_builder_adapter.__class__.__name__ == (
+        "GraphBackedIncidentContextBuilderAdapter"
+    )
+
+
 def test_query_graph_returns_traceable_graph_context():
     router = MiddlewareRouter()
     query = GraphQuery(
