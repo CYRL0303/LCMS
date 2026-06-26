@@ -13,8 +13,11 @@ from legacy_pilot.middleware.app import create_app
 from legacy_pilot.middleware.router import MiddlewareRouter
 
 
-def alert_payload(contract_version: str = "1.0.0") -> dict:
-    return {
+def alert_payload(
+    contract_version: str = "1.0.0",
+    graph_id: str | None = None,
+) -> dict:
+    payload = {
         "alert_id": "ALERT-001",
         "repo_id": "repo-demo",
         "raw_log": (
@@ -27,6 +30,9 @@ def alert_payload(contract_version: str = "1.0.0") -> dict:
         "source": "demo-cli",
         "contract_version": contract_version,
     }
+    if graph_id is not None:
+        payload["graph_id"] = graph_id
+    return payload
 
 
 class ApiFakeAdapter(CodeKnowledgeCoreAdapter):
@@ -70,6 +76,18 @@ def test_submit_alert_endpoint_returns_incident_query():
     assert body["trace_id"] == "TRACE-ALERT-001"
     assert body["error_type"] == "NullPointerException"
     assert "DatasetService.getVersion" in body["query_terms"]
+
+
+def test_submit_alert_endpoint_preserves_optional_graph_id():
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/v1/alerts/submit",
+        json=alert_payload(graph_id="GRAPH-repo-demo"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["graph_id"] == "GRAPH-repo-demo"
 
 
 def test_http_pipeline_builds_reviews_and_saves_incident():

@@ -57,6 +57,16 @@ class RecordingFakeAdapter(CodeKnowledgeCoreAdapter):
         )
 
 
+class RecordingGraphContextRouter(MiddlewareRouter):
+    def __init__(self, **kwargs):
+        self.router_query_called = False
+        super().__init__(**kwargs)
+
+    def query_graph(self, query: GraphQuery) -> GraphContext:
+        self.router_query_called = True
+        return super().query_graph(query)
+
+
 class FailingFakeAdapter(CodeKnowledgeCoreAdapter):
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
         raise IndexingError("repo path is not readable", recoverable=True)
@@ -206,6 +216,21 @@ def test_router_selects_graph_backed_incident_context_adapter(monkeypatch):
     assert router._incident_context_builder_adapter.__class__.__name__ == (
         "GraphBackedIncidentContextBuilderAdapter"
     )
+
+
+def test_graph_backed_router_builds_bundle_through_middleware_contract(monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND", "graph_context")
+    code_adapter = RecordingFakeAdapter()
+    router = RecordingGraphContextRouter(code_knowledge_core_adapter=code_adapter)
+
+    query = router.submit_alert(alert_event())
+    bundle = router.build_evidence_bundle(query)
+
+    assert router.router_query_called is True
+    assert code_adapter.query_called is True
+    assert bundle.trace_id == query.trace_id
+    assert bundle.similar_incidents[0].incident_id == "INC-003"
+    assert bundle.similar_incidents[0].evidence_refs
 
 
 def test_query_graph_returns_traceable_graph_context():

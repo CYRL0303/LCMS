@@ -160,6 +160,15 @@ class MockCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
             extraction_method="java_parser",
             confidence=0.95,
         )
+        log_evidence = self._evidence_ref(
+            evidence_id="EV-LOG-001",
+            trace_id=query.trace_id,
+            source_type="log",
+            source_id=query.trace_id,
+            excerpt="NullPointerException at DatasetService.getVersion(DatasetService.java:42)",
+            extraction_method="regex",
+            confidence=0.88,
+        )
         controller = Node(
             node_id="NODE-DATASET-CONTROLLER-GET-VERSION",
             graph_id=query.graph_id,
@@ -219,7 +228,7 @@ class MockCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
                     "dataset_version",
                 ]
             ],
-            evidence_refs=[evidence],
+            evidence_refs=[evidence, log_evidence],
             confidence=0.88,
         )
 

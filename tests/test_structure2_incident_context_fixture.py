@@ -37,6 +37,7 @@ def test_structure2_builds_evidence_bundle_from_java_production_context():
     )
     sql = evidence_ref("EV-SQL-DATASET-VERSION", "sql", "SQL:selectVersionById")
     config = evidence_ref("EV-CONFIG-DATASOURCE", "config", "spring.datasource.url")
+    log = evidence_ref("EV-LOG-DATASET-NPE", "log", "TRACE-ALERT-PROD-001")
     graph_queries = []
 
     def query_graph(graph_query):
@@ -62,7 +63,7 @@ def test_structure2_builds_evidence_bundle_from_java_production_context():
                     "dataset_version",
                 ]
             ],
-            evidence_refs=[code, sql, config],
+            evidence_refs=[code, sql, config, log],
             confidence=0.88,
         )
 
@@ -97,6 +98,7 @@ def test_structure2_builds_evidence_bundle_from_java_production_context():
     assert bundle.code_evidence == [code]
     assert bundle.sql_evidence == [sql]
     assert bundle.config_evidence == [config]
+    assert bundle.log_evidence == [log]
     assert bundle.graph_paths == [
         [
             "DatasetController.getVersion",
