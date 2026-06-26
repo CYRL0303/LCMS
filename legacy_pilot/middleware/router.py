@@ -11,7 +11,6 @@ from legacy_pilot.contracts.enums import ErrorCode
 from legacy_pilot.contracts.errors import ContractError, ContractViolation
 from legacy_pilot.contracts.models import (
     AlertEvent,
-    Edge,
     EvidenceBackedItem,
     EvidenceBundle,
     EvidenceRef,
@@ -21,12 +20,15 @@ from legacy_pilot.contracts.models import (
     IncidentMatch,
     IncidentQuery,
     IncidentRecord,
-    Node,
     RCAReport,
     RepoIndexRequest,
     ReviewedRCAReport,
 )
 from legacy_pilot.contracts.validators import ensure_supported_contract_version, ensure_trace_id
+from legacy_pilot.incident_context_builder.adapter import (
+    IncidentContextBuilderAdapter,
+    create_incident_context_builder_adapter,
+)
 
 
 class MiddlewareRouter:
@@ -35,11 +37,16 @@ class MiddlewareRouter:
         now: Callable[[], datetime] | None = None,
         *,
         code_knowledge_core_adapter: CodeKnowledgeCoreAdapter | None = None,
+        incident_context_builder_adapter: IncidentContextBuilderAdapter | None = None,
     ):
         self._now = now or (lambda: datetime.now(UTC))
         self._code_knowledge_core_adapter = (
             code_knowledge_core_adapter
             or create_code_knowledge_core_adapter(now=self._now)
+        )
+        self._incident_context_builder_adapter = (
+            incident_context_builder_adapter
+            or create_incident_context_builder_adapter(now=self._now)
         )
 
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
@@ -65,75 +72,12 @@ class MiddlewareRouter:
 
     def submit_alert(self, alert: AlertEvent) -> IncidentQuery:
         ensure_supported_contract_version(alert.contract_version)
-        trace_id = f"TRACE-{alert.alert_id}"
-        error_type = self._detect_error_type(alert)
-        suspected_location = self._detect_location(alert)
-        query_terms = [error_type]
-        if suspected_location:
-            query_terms.append(suspected_location)
-        return IncidentQuery(
-            trace_id=trace_id,
-            repo_id=alert.repo_id,
-            error_type=error_type,
-            suspected_location=suspected_location,
-            endpoint="/api/dataset/version" if "Dataset" in alert.raw_log else None,
-            keywords=[term for term in query_terms if term],
-            query_terms=query_terms,
-            contract_version=alert.contract_version,
-        )
+        return self._incident_context_builder_adapter.submit_alert(alert)
 
     def build_evidence_bundle(self, query: IncidentQuery) -> EvidenceBundle:
         ensure_trace_id(query.trace_id)
         ensure_supported_contract_version(query.contract_version, trace_id=query.trace_id)
-        code_evidence = self._evidence_ref(
-            evidence_id="EV-CODE-001",
-            trace_id=query.trace_id,
-            source_type="code",
-            source_id="DatasetService.java",
-            file_path="src/main/java/DatasetService.java",
-            start_line=40,
-            end_line=45,
-            excerpt="return datasetMapper.selectVersionById(req.getDatasetId());",
-            extraction_method="java_parser",
-            confidence=0.95,
-        )
-        log_evidence = self._evidence_ref(
-            evidence_id="EV-LOG-001",
-            trace_id=query.trace_id,
-            source_type="log",
-            source_id=query.trace_id,
-            excerpt="NullPointerException at DatasetService.getVersion(DatasetService.java:42)",
-            extraction_method="regex",
-            confidence=0.88,
-        )
-        service_node = Node(
-            node_id="NODE-DATASET-SERVICE-GET-VERSION",
-            graph_id="GRAPH-DEMO",
-            repo_id=query.repo_id,
-            type="Method",
-            name="getVersion",
-            qualified_name="com.legacy.DatasetService.getVersion",
-            evidence_refs=[code_evidence],
-        )
-        return EvidenceBundle(
-            trace_id=query.trace_id,
-            repo_id=query.repo_id,
-            contract_version=query.contract_version,
-            alert_summary=f"{query.error_type} near {query.suspected_location}",
-            incident_query=query,
-            matched_nodes=[service_node],
-            graph_paths=[
-                [
-                    "DatasetController.getVersion",
-                    "DatasetService.getVersion",
-                    "DatasetMapper.selectVersionById",
-                    "dataset_version",
-                ]
-            ],
-            code_evidence=[code_evidence],
-            log_evidence=[log_evidence],
-            similar_incidents=self.find_similar_incidents(query),
-        )
+        return self._incident_context_builder_adapter.build_evidence_bundle(query)
 
     def generate_rca(self, bundle: EvidenceBundle) -> RCAReport:
         ensure_trace_id(bundle.trace_id)
@@ -324,20 +268,6 @@ class MiddlewareRouter:
             confidence=confidence,
             created_at=self._now(),
         )
-
-    def _detect_error_type(self, alert: AlertEvent) -> str:
-        text = f"{alert.raw_log}\n{alert.stack_trace or ''}\n{alert.error_description or ''}"
-        if "NullPointerException" in text:
-            return "NullPointerException"
-        if "Slow query" in text or "slow query" in text:
-            return "SlowQuery"
-        return "UnknownError"
-
-    def _detect_location(self, alert: AlertEvent) -> str | None:
-        text = f"{alert.raw_log}\n{alert.stack_trace or ''}"
-        if "DatasetService.getVersion" in text:
-            return "DatasetService.getVersion"
-        return None
 
     def _evidence_required(self, *, trace_id: str, message: str) -> ContractViolation:
         return ContractViolation(

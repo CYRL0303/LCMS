@@ -12,11 +12,17 @@ from legacy_pilot.contracts.errors import ContractViolation
 from legacy_pilot.contracts.models import (
     AlertEvent,
     EvidenceBackedItem,
+    EvidenceBundle,
     GraphContext,
     GraphQuery,
     GraphSnapshot,
+    IncidentQuery,
     RCAReport,
     RepoIndexRequest,
+)
+from legacy_pilot.incident_context_builder.adapter import (
+    IncidentContextBuilderAdapter,
+    MockIncidentContextBuilderAdapter,
 )
 from legacy_pilot.middleware.router import MiddlewareRouter
 
@@ -72,6 +78,34 @@ class DiagnosticFailingFakeAdapter(CodeKnowledgeCoreAdapter):
             "GitNexus CLI failed while querying graph.",
             recoverable=True,
             diagnostics={"stderr": "Traceback: internal secret", "returncode": "17"},
+        )
+
+
+class RecordingIncidentContextAdapter(IncidentContextBuilderAdapter):
+    def __init__(self):
+        self.submit_called = False
+        self.bundle_called = False
+
+    def submit_alert(self, alert: AlertEvent) -> IncidentQuery:
+        self.submit_called = True
+        return IncidentQuery(
+            trace_id=f"TRACE-{alert.alert_id}",
+            repo_id=alert.repo_id,
+            graph_id=alert.graph_id,
+            error_type="InjectedError",
+            suspected_location="Injected.location",
+            query_terms=["InjectedError", "Injected.location"],
+            contract_version=alert.contract_version,
+        )
+
+    def build_evidence_bundle(self, query: IncidentQuery) -> EvidenceBundle:
+        self.bundle_called = True
+        return EvidenceBundle(
+            trace_id=query.trace_id,
+            repo_id=query.repo_id,
+            contract_version=query.contract_version,
+            alert_summary="InjectedError near Injected.location",
+            incident_query=query,
         )
 
 
@@ -140,6 +174,28 @@ def test_find_similar_incidents_returns_confirmed_mock_match():
     assert matches[0].incident_id == "INC-003"
     assert matches[0].confirmed_by_user is True
     assert matches[0].evidence_refs
+
+
+def test_router_delegates_structure2_calls_to_incident_context_adapter():
+    adapter = RecordingIncidentContextAdapter()
+    router = MiddlewareRouter(incident_context_builder_adapter=adapter)
+
+    query = router.submit_alert(alert_event())
+    bundle = router.build_evidence_bundle(query)
+
+    assert adapter.submit_called is True
+    assert adapter.bundle_called is True
+    assert query.error_type == "InjectedError"
+    assert bundle.alert_summary == "InjectedError near Injected.location"
+
+
+def test_default_router_uses_mock_incident_context_adapter():
+    router = MiddlewareRouter()
+
+    assert isinstance(
+        router._incident_context_builder_adapter,
+        MockIncidentContextBuilderAdapter,
+    )
 
 
 def test_query_graph_returns_traceable_graph_context():

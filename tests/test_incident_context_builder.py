@@ -1,6 +1,9 @@
 from datetime import UTC, datetime
 
 from legacy_pilot.contracts.models import AlertEvent
+from legacy_pilot.incident_context_builder.adapter import (
+    MockIncidentContextBuilderAdapter,
+)
 from legacy_pilot.incident_context_builder.signals import parse_alert_event
 
 
@@ -98,3 +101,30 @@ def test_parse_alert_event_deduplicates_query_terms_in_order():
         "/api/dataset/version",
         "dataset_version",
     ]
+
+
+def test_mock_incident_context_adapter_preserves_submit_alert_behavior():
+    adapter = MockIncidentContextBuilderAdapter()
+
+    query = adapter.submit_alert(alert_event())
+
+    assert query.trace_id == "TRACE-ALERT-001"
+    assert query.repo_id == "repo-demo"
+    assert query.graph_id == "GRAPH-repo-demo"
+    assert query.error_type == "NullPointerException"
+    assert query.suspected_location == "DatasetService.getVersion"
+    assert query.endpoint == "/api/dataset/version"
+    assert query.contract_version == "1.0.0"
+
+
+def test_mock_incident_context_adapter_builds_evidence_bundle():
+    adapter = MockIncidentContextBuilderAdapter()
+    query = adapter.submit_alert(alert_event())
+
+    bundle = adapter.build_evidence_bundle(query)
+
+    assert bundle.trace_id == query.trace_id
+    assert bundle.contract_version == query.contract_version
+    assert bundle.code_evidence
+    assert bundle.log_evidence
+    assert bundle.similar_incidents[0].incident_id == "INC-003"
