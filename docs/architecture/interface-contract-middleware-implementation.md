@@ -397,6 +397,37 @@ HTTP: POST /v1/evidence-bundles/build
 - EvidenceBundle 只能组合证据，不应直接输出最终根因。
 - 调用图谱和历史故障时必须通过中间件契约，不直接读其他结构内部对象。
 
+真实接入点：
+
+```text
+SubmitAlert
+-> MiddlewareRouter.submit_alert()
+-> IncidentContextBuilderAdapter.submit_alert()
+-> IncidentQuery
+
+BuildEvidenceBundle
+-> MiddlewareRouter.build_evidence_bundle()
+-> IncidentContextBuilderAdapter.build_evidence_bundle()
+-> GraphQuery via MiddlewareRouter.query_graph()
+-> GraphContext
+-> EvidenceBundle
+```
+
+结构2 backend：
+
+```text
+LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND=mock | graph_context
+```
+
+边界：
+
+- `mock` 保留 deterministic demo 行为。
+- `graph_context` 调用结构1 `QueryGraph`，只消费 `GraphContext`。
+- 结构2不直连 PostgreSQL graph store。
+- 结构2不读取 GitNexus raw payload。
+- 结构2不生成 RCA 结论。
+- `AlertEvent.graph_id` 与 `IncidentQuery.graph_id` 为可选字段；缺省时使用 `GRAPH-{repo_id}`。
+
 ### 6.3 RCA Reasoning Engine
 
 RCA Reasoning Engine 负责基于 EvidenceBundle 输出根因分析和审查结果，不直接读 repo，不直接写 incident memory。

@@ -200,6 +200,13 @@ Incident Context Builder 负责把报警、日志、stack trace 或错误描述�
 - 调用 Incident Memory & Report Store 检索历史相似故障。
 - 组装 EvidenceBundle。
 
+当前实现计划：
+
+- 结构2拥有独立 `IncidentContextBuilderAdapter`。
+- `SubmitAlert` 解析 raw log、stack trace、error_description，输出 `IncidentQuery`。
+- `BuildEvidenceBundle` 通过 `GraphQuery` 请求结构1，消费 `GraphContext` 并组装 `EvidenceBundle`。
+- graph version 由可选 `graph_id` 控制；缺省时回退 `GRAPH-{repo_id}`。
+
 ### 4.3 不负责的事情
 
 - 不生成最终根因。

@@ -38,17 +38,21 @@ contract boundary:
 - Structure 1 graph persistence is disabled by default, supports opt-in
   PostgreSQL payload storage, and restores `QueryGraph` from PostgreSQL only
   for locally queryable plans with no process-local index.
+- Structure 2 now has an `IncidentContextBuilderAdapter` boundary. It keeps
+  deterministic mock behavior by default and supports an opt-in `graph_context`
+  backend that builds `EvidenceBundle` from Structure 1 `GraphContext`.
 - Production fixture coverage proves `/api/dataset/version -> controller ->
   service -> mapper -> Mapper XML SQL -> dataset_version`, plus config and
   exception evidence.
 - Middleware/router and the four-structure contract models were not changed for
   Milestone0-5 beyond backward-compatible Structure 1 metadata fields already
-  present on `GraphSnapshot`.
+  present on `GraphSnapshot`; Structure 2 adds optional `graph_id` on
+  `AlertEvent` and `IncidentQuery`.
 
 Latest local verification:
 
 ```text
-Default suite: 150 passed, 7 skipped, 1 warning
+Default suite: 170 passed, 7 skipped, 1 warning
 Structure 1 production fixture: 5 passed, 2 skipped
 PostgreSQL graph store default profile: 7 passed, 1 skipped
 Real GitNexus opt-in suite: 12 passed
@@ -77,6 +81,10 @@ legacy_pilot/
     errors.py
     models.py
     validators.py
+  incident_context_builder/
+    adapter.py
+    evidence_builder.py
+    signals.py
   middleware/
     app.py
     router.py
@@ -205,6 +213,24 @@ The real PostgreSQL integration test is opt-in. Set
 `LEGACY_PILOT_GRAPH_STORE_TEST_TABLE` to isolate test writes from the default
 graph-store table.
 
+### Structure 2 Incident Context Builder
+
+Default backend:
+
+```powershell
+$env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='mock'
+```
+
+Graph-backed backend:
+
+```powershell
+$env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='graph_context'
+```
+
+`graph_context` backend calls `/v1/graph/query` through middleware internals and
+builds `EvidenceBundle` from `GraphContext`. It never connects to Structure 1
+PostgreSQL graph store directly.
+
 ## Run The API
 
 ```bash
@@ -241,5 +267,6 @@ http://127.0.0.1:8000/health
 - `gitnexus_http` is not implemented.
 - Real Qwen semantic enrichment is available only through the opt-in `qwen_api` backend.
 - Semantic graph output is pending and confidence-capped; it is not treated as a trusted structural fact.
+- Structure 2 `graph_context` requires queryable Structure 1 graph context for useful evidence bundles.
 - No persistent incident database is connected yet.
-- Structures 2-4 still use deterministic mock responses used to validate the middleware contract and MVP flow.
+- Structure 2 defaults to deterministic mock responses; Structures 3-4 still use deterministic mock responses used to validate the middleware contract and MVP flow.
