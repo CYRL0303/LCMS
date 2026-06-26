@@ -285,6 +285,10 @@ export function App() {
             onComplete={() => setIsOnboardingComplete(true)}
             onLocalPathChange={setLocalProjectPath}
             onNavigate={navigateTo}
+            onReset={() => {
+              setIsOnboardingComplete(false);
+              setLocalProjectPath('D:\\Hackathon\\LegacyPilot');
+            }}
           />
         )}
         {activePage === 'endpoints' && <EndpointsPage />}
@@ -488,13 +492,15 @@ function OnboardingPage({
   localPath,
   onComplete,
   onLocalPathChange,
-  onNavigate
+  onNavigate,
+  onReset
 }: {
   isComplete: boolean;
   localPath: string;
   onComplete: () => void;
   onLocalPathChange: (path: string) => void;
   onNavigate: (page: PageKey) => void;
+  onReset: () => void;
 }) {
   const steps = [
     'Validate local path',
@@ -515,9 +521,14 @@ function OnboardingPage({
             static for now, but mirrors the backend onboarding flow.
           </p>
         </div>
-        <button className="secondary-action" onClick={() => onNavigate('overview')}>
-          Back to Home
-        </button>
+        <div className="page-actions">
+          <button className="secondary-action" onClick={onReset}>
+            Reset demo
+          </button>
+          <button className="secondary-action" onClick={() => onNavigate('overview')}>
+            Back to Home
+          </button>
+        </div>
       </div>
 
       <div className="onboarding-layout">
