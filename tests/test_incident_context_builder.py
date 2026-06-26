@@ -1,8 +1,20 @@
 from datetime import UTC, datetime
 
-from legacy_pilot.contracts.models import AlertEvent
+from legacy_pilot.contracts.models import (
+    AlertEvent,
+    EvidenceRef,
+    GraphContext,
+    GraphQuery,
+    IncidentQuery,
+    Node,
+)
 from legacy_pilot.incident_context_builder.adapter import (
     MockIncidentContextBuilderAdapter,
+)
+from legacy_pilot.incident_context_builder.evidence_builder import (
+    build_evidence_bundle_from_graph_context,
+    build_graph_query,
+    graph_id_for_query,
 )
 from legacy_pilot.incident_context_builder.signals import parse_alert_event
 
@@ -24,6 +36,23 @@ def alert_event(**overrides):
     }
     values.update(overrides)
     return AlertEvent(**values)
+
+
+def evidence_ref(evidence_id, source_type="code", source_id="DatasetService.java"):
+    return EvidenceRef(
+        evidence_id=evidence_id,
+        trace_id="TRACE-ALERT-001",
+        source_type=source_type,
+        source_id=source_id,
+        file_path="src/main/java/DatasetService.java" if source_type == "code" else None,
+        start_line=40 if source_type == "code" else None,
+        end_line=45 if source_type == "code" else None,
+        excerpt="evidence excerpt",
+        excerpt_hash=f"hash-{evidence_id}",
+        extraction_method="java_parser" if source_type == "code" else "regex",
+        confidence=0.9,
+        created_at=datetime(2026, 6, 24, tzinfo=UTC),
+    )
 
 
 def test_parse_alert_event_extracts_java_exception_location_and_endpoint():
@@ -128,3 +157,93 @@ def test_mock_incident_context_adapter_builds_evidence_bundle():
     assert bundle.code_evidence
     assert bundle.log_evidence
     assert bundle.similar_incidents[0].incident_id == "INC-003"
+
+
+def test_build_graph_query_uses_explicit_graph_id():
+    query = IncidentQuery(
+        trace_id="TRACE-ALERT-001",
+        repo_id="repo-demo",
+        graph_id="GRAPH-explicit",
+        error_type="NullPointerException",
+        suspected_location="DatasetService.getVersion",
+        query_terms=["NullPointerException", "DatasetService.getVersion"],
+        contract_version="1.0.0",
+    )
+
+    graph_query = build_graph_query(query)
+
+    assert graph_query == GraphQuery(
+        repo_id="repo-demo",
+        graph_id="GRAPH-explicit",
+        query_terms=["NullPointerException", "DatasetService.getVersion"],
+        node_filters=[],
+        edge_filters=[],
+        max_depth=4,
+        trace_id="TRACE-ALERT-001",
+        contract_version="1.0.0",
+    )
+
+
+def test_graph_id_for_query_falls_back_to_repo_graph():
+    query = IncidentQuery(
+        trace_id="TRACE-ALERT-001",
+        repo_id="repo-demo",
+        error_type="NullPointerException",
+        query_terms=["NullPointerException"],
+        contract_version="1.0.0",
+    )
+
+    assert graph_id_for_query(query) == "GRAPH-repo-demo"
+
+
+def test_build_evidence_bundle_from_graph_context_partitions_evidence():
+    code = evidence_ref("EV-CODE-1", "code")
+    sql = evidence_ref("EV-SQL-1", "sql", "SQL:selectVersionById")
+    config = evidence_ref("EV-CONFIG-1", "config", "spring.datasource.url")
+    graph_context = GraphContext(
+        trace_id="TRACE-ALERT-001",
+        matched_nodes=[
+            Node(
+                node_id="Method:DatasetService.getVersion",
+                graph_id="GRAPH-repo-demo",
+                repo_id="repo-demo",
+                type="Method",
+                name="DatasetService.getVersion",
+                evidence_refs=[code],
+            )
+        ],
+        matched_edges=[],
+        graph_paths=[
+            [
+                "DatasetController.getVersion",
+                "DatasetService.getVersion",
+                "DatasetMapper.selectVersionById",
+                "dataset_version",
+            ]
+        ],
+        evidence_refs=[code, sql, config],
+        confidence=0.88,
+    )
+    query = IncidentQuery(
+        trace_id="TRACE-ALERT-001",
+        repo_id="repo-demo",
+        graph_id="GRAPH-repo-demo",
+        error_type="NullPointerException",
+        suspected_location="DatasetService.getVersion",
+        query_terms=["NullPointerException", "DatasetService.getVersion"],
+        contract_version="1.0.0",
+    )
+
+    bundle = build_evidence_bundle_from_graph_context(
+        query=query,
+        graph_context=graph_context,
+        similar_incidents=[],
+    )
+
+    assert bundle.trace_id == "TRACE-ALERT-001"
+    assert bundle.matched_nodes == graph_context.matched_nodes
+    assert bundle.graph_paths == graph_context.graph_paths
+    assert bundle.code_evidence == [code]
+    assert bundle.sql_evidence == [sql]
+    assert bundle.config_evidence == [config]
+    assert bundle.missing_evidence == []
