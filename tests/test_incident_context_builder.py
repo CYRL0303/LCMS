@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from legacy_pilot.contracts.models import (
     AlertEvent,
     EvidenceRef,
@@ -11,6 +13,7 @@ from legacy_pilot.contracts.models import (
 from legacy_pilot.incident_context_builder.adapter import (
     GraphBackedIncidentContextBuilderAdapter,
     MockIncidentContextBuilderAdapter,
+    create_incident_context_builder_adapter,
 )
 from legacy_pilot.incident_context_builder.evidence_builder import (
     build_evidence_bundle_from_graph_context,
@@ -158,6 +161,54 @@ def test_mock_incident_context_adapter_builds_evidence_bundle():
     assert bundle.code_evidence
     assert bundle.log_evidence
     assert bundle.similar_incidents[0].incident_id == "INC-003"
+
+
+def test_incident_context_factory_defaults_to_graph_context(monkeypatch):
+    monkeypatch.delenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND", raising=False)
+
+    adapter = create_incident_context_builder_adapter(
+        query_graph=lambda graph_query: GraphContext(
+            trace_id=graph_query.trace_id,
+            matched_nodes=[],
+            matched_edges=[],
+            graph_paths=[],
+            evidence_refs=[],
+            confidence=0.0,
+        ),
+        find_similar_incidents=lambda query: [],
+    )
+
+    assert isinstance(adapter, GraphBackedIncidentContextBuilderAdapter)
+
+
+def test_incident_context_factory_missing_default_dependencies_fails_loud(monkeypatch):
+    monkeypatch.delenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND", raising=False)
+
+    with pytest.raises(ValueError) as excinfo:
+        create_incident_context_builder_adapter()
+
+    assert "graph_context" in str(excinfo.value)
+    assert "query_graph" in str(excinfo.value)
+
+
+def test_incident_context_factory_unknown_backend_fails_loud(monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND", "surprise_backend")
+
+    with pytest.raises(ValueError) as excinfo:
+        create_incident_context_builder_adapter()
+
+    message = str(excinfo.value)
+    assert "surprise_backend" in message
+    assert "graph_context" in message
+    assert "mock" in message
+
+
+def test_incident_context_factory_explicit_mock_still_selects_mock(monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND", "mock")
+
+    adapter = create_incident_context_builder_adapter()
+
+    assert isinstance(adapter, MockIncidentContextBuilderAdapter)
 
 
 def test_build_graph_query_uses_explicit_graph_id():

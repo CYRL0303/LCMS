@@ -21,10 +21,11 @@ from legacy_pilot.contracts.models import (
     RepoIndexRequest,
 )
 from legacy_pilot.incident_context_builder.adapter import (
+    GraphBackedIncidentContextBuilderAdapter,
     IncidentContextBuilderAdapter,
-    MockIncidentContextBuilderAdapter,
 )
 from legacy_pilot.middleware.router import MiddlewareRouter
+from legacy_pilot.rca_reasoning_engine.adapter import QwenApiRCAReasoningEngineAdapter
 
 
 class RecordingFakeAdapter(CodeKnowledgeCoreAdapter):
@@ -135,6 +136,58 @@ def alert_event() -> AlertEvent:
     )
 
 
+def qwen_rca_adapter_for_existing_mock_bundle() -> QwenApiRCAReasoningEngineAdapter:
+    def fake_post(url, headers, body):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"hypotheses":[{"summary":"datasetId guard missing",'
+                            '"evidence_ids":["EV-GRAPH-001"],"confidence":0.7}],'
+                            '"selected_root_cause":{"summary":"datasetId guard missing",'
+                            '"evidence_ids":["EV-GRAPH-001","EV-LOG-001"],"confidence":0.7},'
+                            '"suggested_fix":[{"summary":"add validation",'
+                            '"evidence_ids":["EV-GRAPH-001"],"confidence":0.7}],'
+                            '"migration_impact":{"summary":"endpoint and mapper need regression",'
+                            '"evidence_ids":["EV-GRAPH-001"],"confidence":0.6},'
+                            '"migration_checklist":["add regression"],'
+                            '"affected_path":[],"open_questions":[],"confidence":0.7}'
+                        )
+                    }
+                }
+            ]
+        }
+
+    return QwenApiRCAReasoningEngineAdapter(api_key="test-key", http_post=fake_post)
+
+
+def qwen_rca_adapter_with_unknown_evidence() -> QwenApiRCAReasoningEngineAdapter:
+    def fake_post(url, headers, body):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"hypotheses":[{"summary":"unsupported",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.9}],'
+                            '"selected_root_cause":{"summary":"unsupported",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.9},'
+                            '"suggested_fix":[{"summary":"unsupported",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.9}],'
+                            '"migration_impact":{"summary":"unsupported",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.9},'
+                            '"migration_checklist":[],"affected_path":[],'
+                            '"open_questions":[],"confidence":0.9}'
+                        )
+                    }
+                }
+            ]
+        }
+
+    return QwenApiRCAReasoningEngineAdapter(api_key="test-key", http_post=fake_post)
+
+
 def test_submit_alert_returns_traceable_incident_query():
     router = MiddlewareRouter()
 
@@ -147,8 +200,57 @@ def test_submit_alert_returns_traceable_incident_query():
     assert query.contract_version == "1.0.0"
 
 
-def test_mock_pipeline_produces_evidence_backed_rca_and_incident_record():
+def test_generate_rca_requires_qwen_configuration_when_no_mock_backend(monkeypatch):
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.delenv("LEGACY_PILOT_RCA_BACKEND", raising=False)
     router = MiddlewareRouter()
+    bundle = router.build_evidence_bundle(router.submit_alert(alert_event()))
+
+    with pytest.raises(ContractViolation) as excinfo:
+        router.generate_rca(bundle)
+
+    error = excinfo.value.error
+    assert error.trace_id == bundle.trace_id
+    assert error.source_module == "rca_reasoning_engine"
+    assert error.recoverable is True
+    assert "DASHSCOPE_API_KEY" in error.message
+
+
+def test_router_delegates_generate_and_review_to_qwen_structure3_adapter():
+    router = MiddlewareRouter(
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
+    )
+    bundle = router.build_evidence_bundle(router.submit_alert(alert_event()))
+
+    report = router.generate_rca(bundle)
+    reviewed = router.review_rca(report)
+
+    assert report.trace_id == bundle.trace_id
+    assert report.selected_root_cause.summary == "datasetId guard missing"
+    assert report.selected_root_cause.evidence_refs
+    assert reviewed.approved_findings
+
+
+def test_router_converts_unknown_qwen_evidence_id_to_structure3_contract_error():
+    router = MiddlewareRouter(
+        rca_reasoning_engine_adapter=qwen_rca_adapter_with_unknown_evidence()
+    )
+    bundle = router.build_evidence_bundle(router.submit_alert(alert_event()))
+
+    with pytest.raises(ContractViolation) as excinfo:
+        router.generate_rca(bundle)
+
+    error = excinfo.value.error
+    assert error.trace_id == bundle.trace_id
+    assert error.source_module == "rca_reasoning_engine"
+    assert error.error_code == "VALIDATION_ERROR"
+    assert "EV-UNKNOWN" in error.message
+
+
+def test_pipeline_produces_qwen_evidence_backed_rca_and_incident_record():
+    router = MiddlewareRouter(
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
+    )
 
     query = router.submit_alert(alert_event())
     bundle = router.build_evidence_bundle(query)
@@ -166,9 +268,10 @@ def test_mock_pipeline_produces_evidence_backed_rca_and_incident_record():
     assert bundle.contract_version == query.contract_version
     assert bundle.code_evidence
     assert bundle.log_evidence
-    assert report.trace_id == query.trace_id
-    assert report.contract_version == bundle.contract_version
-    assert report.selected_root_cause.evidence_refs
+    assert report.selected_root_cause.summary == "datasetId guard missing"
+    assert {ref.evidence_id for ref in report.evidence_chain}.issubset(
+        {ref.evidence_id for ref in [*bundle.code_evidence, *bundle.log_evidence]}
+    )
     assert reviewed.final_confidence == report.confidence
     assert record.confirmed_by_user is True
     assert record.evidence_refs
@@ -199,12 +302,12 @@ def test_router_delegates_structure2_calls_to_incident_context_adapter():
     assert bundle.alert_summary == "InjectedError near Injected.location"
 
 
-def test_default_router_uses_mock_incident_context_adapter():
+def test_default_router_uses_graph_backed_incident_context_adapter():
     router = MiddlewareRouter()
 
     assert isinstance(
         router._incident_context_builder_adapter,
-        MockIncidentContextBuilderAdapter,
+        GraphBackedIncidentContextBuilderAdapter,
     )
 
 
@@ -264,7 +367,9 @@ def test_query_graph_returns_traceable_graph_context():
 
 
 def test_review_rca_rejects_report_without_root_cause_evidence():
-    router = MiddlewareRouter()
+    router = MiddlewareRouter(
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
+    )
     valid_report = router.generate_rca(router.build_evidence_bundle(router.submit_alert(alert_event())))
     invalid_root_cause = EvidenceBackedItem.model_construct(
         summary="unsupported conclusion",
@@ -295,7 +400,9 @@ def test_generate_rca_rejects_unsupported_bundle_contract_version():
 
 
 def test_review_rca_rejects_unsupported_report_contract_version():
-    router = MiddlewareRouter()
+    router = MiddlewareRouter(
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
+    )
     report = router.generate_rca(router.build_evidence_bundle(router.submit_alert(alert_event())))
     unsupported_report = report.model_copy(update={"contract_version": "2.0.0"})
 
@@ -307,7 +414,9 @@ def test_review_rca_rejects_unsupported_report_contract_version():
 
 
 def test_save_incident_requires_user_confirmation():
-    router = MiddlewareRouter()
+    router = MiddlewareRouter(
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
+    )
     report = router.generate_rca(router.build_evidence_bundle(router.submit_alert(alert_event())))
     reviewed = router.review_rca(report)
 

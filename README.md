@@ -8,14 +8,16 @@ LegacyPilot is a hackathon MVP for incident-driven legacy system analysis. This 
 - Enforces `contract_version`, `trace_id`, `confidence`, and `evidence_refs` gates.
 - Returns a unified `ContractError` envelope for middleware-level failures.
 - Exposes FastAPI routes for the MVP incident analysis flow.
-- Uses deterministic mock routing by default, with an opt-in `gitnexus_cli` backend for Structure 1 integration checks.
+- Routes the MVP flow through Structure 2 `graph_context` and Structure 3
+  `qwen_api` by default; deterministic mock backends remain explicit test/demo
+  choices, and Structure 1 can opt in to the real `gitnexus_cli` backend.
 
-Current mock flow:
+Default configured flow:
 
 ```text
 SubmitAlert
--> BuildEvidenceBundle
--> GenerateRCA
+-> BuildEvidenceBundle (Structure2 graph_context -> QueryGraph)
+-> GenerateRCA (Structure3 qwen_api)
 -> ReviewRCA
 -> SaveIncident
 ```
@@ -38,9 +40,10 @@ contract boundary:
 - Structure 1 graph persistence is disabled by default, supports opt-in
   PostgreSQL payload storage, and restores `QueryGraph` from PostgreSQL only
   for locally queryable plans with no process-local index.
-- Structure 2 now has an `IncidentContextBuilderAdapter` boundary. It keeps
-  deterministic mock behavior by default and supports an opt-in `graph_context`
-  backend that builds `EvidenceBundle` from Structure 1 `GraphContext`.
+- Structure 2 now has an `IncidentContextBuilderAdapter` boundary. It defaults
+  to the `graph_context` backend that builds `EvidenceBundle` from Structure 1
+  `GraphContext`, with deterministic `mock` kept as an explicit test/demo
+  backend.
 - Production fixture coverage proves `/api/dataset/version -> controller ->
   service -> mapper -> Mapper XML SQL -> dataset_version`, plus config and
   exception evidence.
@@ -218,18 +221,53 @@ graph-store table.
 Default backend:
 
 ```powershell
-$env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='mock'
+$env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='graph_context'
 ```
 
-Graph-backed backend:
+Explicit deterministic backend:
 
 ```powershell
-$env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='graph_context'
+$env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='mock'
 ```
 
 `graph_context` backend calls `/v1/graph/query` through middleware internals and
 builds `EvidenceBundle` from `GraphContext`. It never connects to Structure 1
 PostgreSQL graph store directly.
+
+### Structure 3 RCA Reasoning Engine
+
+Default backend:
+
+```powershell
+$env:LEGACY_PILOT_RCA_BACKEND='qwen_api'
+$env:LEGACY_PILOT_RCA_BASE_URL='https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
+$env:LEGACY_PILOT_RCA_MODEL='qwen-plus'
+$env:LEGACY_PILOT_RCA_CONFIDENCE_CAP='0.75'
+$env:LEGACY_PILOT_RCA_REPAIR_ATTEMPTS='2'
+$env:DASHSCOPE_API_KEY='<set outside git>'
+```
+
+The Qwen adapter retries invalid JSON or invalid schema responses with a repair
+prompt. `LEGACY_PILOT_RCA_REPAIR_ATTEMPTS` is bounded internally so real runs
+cannot retry indefinitely.
+
+Persist the Qwen key once for this Windows user:
+
+```powershell
+.\scripts\set-qwen-user-env.ps1 -WriteDotEnvLocal
+```
+
+Replace the persisted Qwen key later by running the same script again, or by
+setting the user environment variable directly:
+
+```powershell
+[Environment]::SetEnvironmentVariable('DASHSCOPE_API_KEY', '<new-key>', 'User')
+$env:DASHSCOPE_API_KEY='<new-key>'
+```
+
+`scripts/run-real-e2e.ps1` reads the current process env first, then
+`.env.local`, then the Windows User `DASHSCOPE_API_KEY`, so a one-time persisted
+key is reused by later real E2E runs. `.env.local` is gitignored.
 
 ## Run The API
 
@@ -267,6 +305,6 @@ http://127.0.0.1:8000/health
 - `gitnexus_http` is not implemented.
 - Real Qwen semantic enrichment is available only through the opt-in `qwen_api` backend.
 - Semantic graph output is pending and confidence-capped; it is not treated as a trusted structural fact.
-- Structure 2 `graph_context` requires queryable Structure 1 graph context for useful evidence bundles.
+- Structure 2 defaults to `graph_context`, which requires queryable Structure 1 graph context for useful evidence bundles.
 - No persistent incident database is connected yet.
-- Structure 2 defaults to deterministic mock responses; Structures 3-4 still use deterministic mock responses used to validate the middleware contract and MVP flow.
+- Structure 2 deterministic mock responses require explicit `LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND=mock`.

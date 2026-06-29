@@ -1,6 +1,5 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
 
 from legacy_pilot.code_knowledge_core.adapter import (
     CodeKnowledgeCoreAdapter,
@@ -29,6 +28,11 @@ from legacy_pilot.incident_context_builder.adapter import (
     IncidentContextBuilderAdapter,
     create_incident_context_builder_adapter,
 )
+from legacy_pilot.rca_reasoning_engine.adapter import (
+    RCAReasoningEngineAdapter,
+    create_rca_reasoning_engine_adapter,
+)
+from legacy_pilot.rca_reasoning_engine.errors import RCAReasoningEngineError
 
 
 class MiddlewareRouter:
@@ -38,6 +42,7 @@ class MiddlewareRouter:
         *,
         code_knowledge_core_adapter: CodeKnowledgeCoreAdapter | None = None,
         incident_context_builder_adapter: IncidentContextBuilderAdapter | None = None,
+        rca_reasoning_engine_adapter: RCAReasoningEngineAdapter | None = None,
     ):
         self._now = now or (lambda: datetime.now(UTC))
         self._code_knowledge_core_adapter = (
@@ -53,6 +58,9 @@ class MiddlewareRouter:
                     incident_query
                 ),
             )
+        )
+        self._rca_reasoning_engine_adapter = (
+            rca_reasoning_engine_adapter or create_rca_reasoning_engine_adapter()
         )
 
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
@@ -88,78 +96,18 @@ class MiddlewareRouter:
     def generate_rca(self, bundle: EvidenceBundle) -> RCAReport:
         ensure_trace_id(bundle.trace_id)
         ensure_supported_contract_version(bundle.contract_version, trace_id=bundle.trace_id)
-        primary_evidence = [*bundle.code_evidence, *bundle.log_evidence]
-        if not primary_evidence:
-            raise self._evidence_required(
-                trace_id=bundle.trace_id,
-                message="EvidenceBundle must contain evidence before RCA generation.",
-            )
-        root_cause = EvidenceBackedItem(
-            summary="DatasetService.getVersion dereferences datasetId without a validated input guard.",
-            evidence_refs=primary_evidence,
-            confidence=0.82,
-        )
-        suggested_fix = EvidenceBackedItem(
-            summary="Add request-level @NotNull validation and a service-level null guard for datasetId.",
-            evidence_refs=primary_evidence,
-            confidence=0.8,
-        )
-        migration_impact = EvidenceBackedItem(
-            summary="Medium risk: the endpoint depends on DatasetService, DatasetMapper, and dataset_version.",
-            evidence_refs=primary_evidence,
-            confidence=0.76,
-        )
-        return RCAReport(
-            report_id=f"RCA-{bundle.trace_id.removeprefix('TRACE-')}",
-            trace_id=bundle.trace_id,
-            repo_id=bundle.repo_id,
-            contract_version=bundle.contract_version,
-            hypotheses=[root_cause],
-            selected_root_cause=root_cause,
-            evidence_chain=primary_evidence,
-            affected_path=bundle.graph_paths[0] if bundle.graph_paths else [],
-            suggested_fix=[suggested_fix],
-            migration_impact=migration_impact,
-            migration_checklist=[
-                "Add a missing datasetId regression test.",
-                "Check DTO validation for every endpoint reusing DatasetReqVO.",
-                "Verify DatasetMapper SQL behavior for null datasetId.",
-            ],
-            confidence=0.82,
-            open_questions=[],
-        )
+        try:
+            return self._rca_reasoning_engine_adapter.generate_rca(bundle)
+        except RCAReasoningEngineError as exc:
+            raise self._rca_reasoning_error(trace_id=bundle.trace_id, error=exc) from exc
 
     def review_rca(self, report: RCAReport) -> ReviewedRCAReport:
         ensure_trace_id(report.trace_id)
         ensure_supported_contract_version(report.contract_version, trace_id=report.trace_id)
-        if not self._has_evidence(report.selected_root_cause):
-            raise self._evidence_required(
-                trace_id=report.trace_id,
-                message="selected_root_cause must include evidence_refs.",
-            )
-        for fix in report.suggested_fix:
-            if not self._has_evidence(fix):
-                raise self._evidence_required(
-                    trace_id=report.trace_id,
-                    message="suggested_fix must include evidence_refs.",
-                )
-        if not self._has_evidence(report.migration_impact):
-            raise self._evidence_required(
-                trace_id=report.trace_id,
-                message="migration_impact must include evidence_refs.",
-            )
-        return ReviewedRCAReport(
-            report_id=report.report_id,
-            trace_id=report.trace_id,
-            repo_id=report.repo_id,
-            approved_findings=[report.selected_root_cause, *report.suggested_fix],
-            rejected_findings=[],
-            missing_evidence=[],
-            risk_notes=[
-                "RCA is based on mock evidence; replace Code Knowledge Core and RCA Engine adapters later."
-            ],
-            final_confidence=report.confidence,
-        )
+        try:
+            return self._rca_reasoning_engine_adapter.review_rca(report)
+        except RCAReasoningEngineError as exc:
+            raise self._rca_reasoning_error(trace_id=report.trace_id, error=exc) from exc
 
     def find_similar_incidents(self, query: IncidentQuery) -> list[IncidentMatch]:
         ensure_trace_id(query.trace_id)
@@ -302,10 +250,22 @@ class MiddlewareRouter:
             )
         )
 
-    def _has_evidence(self, value: Any) -> bool:
-        if isinstance(value, dict):
-            return bool(value.get("evidence_refs"))
-        return bool(getattr(value, "evidence_refs", None))
+    def _rca_reasoning_error(
+        self,
+        *,
+        trace_id: str,
+        error: RCAReasoningEngineError,
+    ) -> ContractViolation:
+        return ContractViolation(
+            ContractError(
+                trace_id=trace_id,
+                error_code=error.error_code,
+                message=error.message,
+                source_module=error.source_module,
+                recoverable=error.recoverable,
+                missing_fields=error.missing_fields,
+            )
+        )
 
     def _collect_evidence(self, items: list[EvidenceBackedItem]) -> list[EvidenceRef]:
         evidence: list[EvidenceRef] = []

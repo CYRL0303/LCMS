@@ -20,11 +20,13 @@ REQUIRED_ENV_KEYS = (
     "GITNEXUS_BIN",
     "GITNEXUS_REPO_ROOT",
     "LEGACY_PILOT_GRAPH_STORE_DSN",
+    "DASHSCOPE_API_KEY",
 )
 REQUIRED_ENV_VALUES = {
     "LEGACY_PILOT_CODE_CORE_BACKEND": "gitnexus_cli",
     "LEGACY_PILOT_GRAPH_STORE_BACKEND": "postgresql",
     "LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND": "graph_context",
+    "LEGACY_PILOT_RCA_BACKEND": "qwen_api",
 }
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "java_spring_production_demo"
 
@@ -43,12 +45,20 @@ def test_real_e2e_skip_reason_lists_required_environment(monkeypatch):
         assert key in reason
     for key in REQUIRED_ENV_VALUES:
         assert key in reason
+    assert "DASHSCOPE_API_KEY" in reason
+    assert "LEGACY_PILOT_RCA_BACKEND=qwen_api" in reason
+
+
+def test_real_e2e_enabled_missing_environment_fails_loudly(monkeypatch):
+    monkeypatch.setenv(RUN_ENV, "1")
+
+    with pytest.raises(pytest.fail.Exception):
+        _skip_or_fail_real_e2e("missing DASHSCOPE_API_KEY")
 
 
 def test_real_gitnexus_postgres_structure2_e2e():
     reason = _real_e2e_skip_reason()
-    if reason:
-        pytest.skip(reason)
+    _skip_or_fail_real_e2e(reason)
 
     table_name = os.getenv(
         "LEGACY_PILOT_GRAPH_STORE_TABLE",
@@ -84,10 +94,13 @@ def test_real_gitnexus_postgres_structure2_e2e():
     record = router.save_incident(
         reviewed_report=reviewed,
         user_confirmation=True,
-        fix_outcome="verified_by_real_e2e",
+        fix_outcome="verified_by_real_structure3_e2e",
         retention_policy="e2e-test",
         contract_version="1.0.0",
     )
+    bundle_evidence_ids = _bundle_evidence_ids(bundle)
+    report_evidence_ids = _report_evidence_ids(report)
+    reviewed_evidence_ids = _reviewed_evidence_ids(reviewed)
 
     assert query.graph_id == snapshot.graph_id
     assert query.query_terms == [
@@ -101,6 +114,18 @@ def test_real_gitnexus_postgres_structure2_e2e():
     assert bundle.graph_paths
     assert bundle.code_evidence
     assert bundle.missing_evidence == []
+    assert report.trace_id == query.trace_id
+    assert report.contract_version == bundle.contract_version
+    assert report.selected_root_cause.evidence_refs
+    assert report.suggested_fix
+    assert report.suggested_fix[0].evidence_refs
+    assert report.migration_impact.evidence_refs
+    assert report.evidence_chain
+    assert report_evidence_ids.issubset(bundle_evidence_ids)
+    assert reviewed.report_id == report.report_id
+    assert reviewed.approved_findings
+    assert reviewed.final_confidence == report.confidence
+    assert reviewed_evidence_ids.issubset(bundle_evidence_ids)
     assert record.incident_id == "INC-ALERT-PG-GITNEXUS-E2E"
     assert record.confirmed_by_user is True
     assert record.evidence_refs
@@ -129,9 +154,48 @@ def _real_e2e_skip_reason() -> str | None:
     if not missing_keys:
         return None
     return (
-        "Real Structure1/PostgreSQL/Structure2 E2E is opt-in; set "
-        f"{', '.join(missing_keys)} to run against local GitNexus and PostgreSQL."
+        "Real Structure1/PostgreSQL/Structure2/Structure3 E2E is opt-in; set "
+        f"{', '.join(missing_keys)} to run against local GitNexus, PostgreSQL, "
+        "and Qwen."
     )
+
+
+def _skip_or_fail_real_e2e(reason: str | None) -> None:
+    if not reason:
+        return
+    if os.getenv(RUN_ENV) == "1":
+        pytest.fail(reason)
+    pytest.skip(reason)
+
+
+def _bundle_evidence_ids(bundle) -> set[str]:
+    refs = [
+        *bundle.code_evidence,
+        *bundle.sql_evidence,
+        *bundle.config_evidence,
+        *bundle.log_evidence,
+    ]
+    for incident in bundle.similar_incidents:
+        refs.extend(incident.evidence_refs)
+    return {ref.evidence_id for ref in refs}
+
+
+def _report_evidence_ids(report) -> set[str]:
+    refs = [
+        *report.evidence_chain,
+        *report.selected_root_cause.evidence_refs,
+        *report.migration_impact.evidence_refs,
+    ]
+    for item in [*report.hypotheses, *report.suggested_fix]:
+        refs.extend(item.evidence_refs)
+    return {ref.evidence_id for ref in refs}
+
+
+def _reviewed_evidence_ids(reviewed) -> set[str]:
+    refs = []
+    for item in reviewed.approved_findings:
+        refs.extend(item.evidence_refs)
+    return {ref.evidence_id for ref in refs}
 
 
 def _production_fixture_request() -> RepoIndexRequest:

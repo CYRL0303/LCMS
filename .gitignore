@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .env
 .env.*
+.env.local
 !.env.example
 uvicorn*.log
 tests/fixtures/java_spring_demo/.gitnexus/

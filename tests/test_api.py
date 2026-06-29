@@ -11,6 +11,7 @@ from legacy_pilot.contracts.models import (
 )
 from legacy_pilot.middleware.app import create_app
 from legacy_pilot.middleware.router import MiddlewareRouter
+from legacy_pilot.rca_reasoning_engine.adapter import QwenApiRCAReasoningEngineAdapter
 
 
 def alert_payload(
@@ -54,6 +55,58 @@ class ApiFakeAdapter(CodeKnowledgeCoreAdapter):
         )
 
 
+def qwen_rca_adapter_for_existing_mock_bundle() -> QwenApiRCAReasoningEngineAdapter:
+    def fake_post(url, headers, body):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"hypotheses":[{"summary":"datasetId guard missing",'
+                            '"evidence_ids":["EV-GRAPH-001"],"confidence":0.7}],'
+                            '"selected_root_cause":{"summary":"datasetId guard missing",'
+                            '"evidence_ids":["EV-GRAPH-001","EV-LOG-001"],"confidence":0.7},'
+                            '"suggested_fix":[{"summary":"add validation",'
+                            '"evidence_ids":["EV-GRAPH-001"],"confidence":0.7}],'
+                            '"migration_impact":{"summary":"endpoint and mapper need regression",'
+                            '"evidence_ids":["EV-GRAPH-001"],"confidence":0.6},'
+                            '"migration_checklist":["add regression"],'
+                            '"affected_path":[],"open_questions":[],"confidence":0.7}'
+                        )
+                    }
+                }
+            ]
+        }
+
+    return QwenApiRCAReasoningEngineAdapter(api_key="test-key", http_post=fake_post)
+
+
+def qwen_rca_adapter_with_unknown_evidence() -> QwenApiRCAReasoningEngineAdapter:
+    def fake_post(url, headers, body):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"hypotheses":[{"summary":"unsupported",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.9}],'
+                            '"selected_root_cause":{"summary":"unsupported",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.9},'
+                            '"suggested_fix":[{"summary":"unsupported",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.9}],'
+                            '"migration_impact":{"summary":"unsupported",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.9},'
+                            '"migration_checklist":[],"affected_path":[],'
+                            '"open_questions":[],"confidence":0.9}'
+                        )
+                    }
+                }
+            ]
+        }
+
+    return QwenApiRCAReasoningEngineAdapter(api_key="test-key", http_post=fake_post)
+
+
 def test_health_endpoint_exposes_middleware_identity():
     client = TestClient(create_app())
 
@@ -90,8 +143,29 @@ def test_submit_alert_endpoint_preserves_optional_graph_id():
     assert response.json()["graph_id"] == "GRAPH-repo-demo"
 
 
-def test_http_pipeline_builds_reviews_and_saves_incident():
-    client = TestClient(create_app())
+def test_generate_rca_endpoint_converts_unknown_qwen_evidence_id_to_contract_error():
+    router = MiddlewareRouter(
+        rca_reasoning_engine_adapter=qwen_rca_adapter_with_unknown_evidence()
+    )
+    client = TestClient(create_app(router=router))
+    query = client.post("/v1/alerts/submit", json=alert_payload()).json()
+    bundle = client.post("/v1/evidence-bundles/build", json=query).json()
+
+    response = client.post("/v1/rca/generate", json=bundle)
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["trace_id"] == "TRACE-ALERT-001"
+    assert body["source_module"] == "rca_reasoning_engine"
+    assert body["error_code"] == "VALIDATION_ERROR"
+    assert "EV-UNKNOWN" in body["message"]
+
+
+def test_http_pipeline_builds_qwen_reviews_and_saves_incident():
+    router = MiddlewareRouter(
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
+    )
+    client = TestClient(create_app(router=router))
 
     query = client.post("/v1/alerts/submit", json=alert_payload()).json()
     bundle_response = client.post("/v1/evidence-bundles/build", json=query)
@@ -110,6 +184,10 @@ def test_http_pipeline_builds_reviews_and_saves_incident():
 
     assert bundle_response.status_code == 200
     assert report_response.status_code == 200
+    assert (
+        report_response.json()["selected_root_cause"]["summary"]
+        == "datasetId guard missing"
+    )
     assert reviewed_response.status_code == 200
     assert record_response.status_code == 200
     record = record_response.json()

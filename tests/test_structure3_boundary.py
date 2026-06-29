@@ -76,6 +76,17 @@ def test_rca_factory_defaults_to_qwen_api_not_mock(monkeypatch):
     assert isinstance(adapter, QwenApiRCAReasoningEngineAdapter)
 
 
+def test_rca_factory_reads_qwen_repair_attempts_from_env(monkeypatch):
+    monkeypatch.delenv("LEGACY_PILOT_RCA_BACKEND", raising=False)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    monkeypatch.setenv("LEGACY_PILOT_RCA_REPAIR_ATTEMPTS", "3")
+
+    adapter = create_rca_reasoning_engine_adapter()
+
+    assert isinstance(adapter, QwenApiRCAReasoningEngineAdapter)
+    assert adapter.max_repair_attempts == 3
+
+
 def test_structure3_package_imports_only_contracts_and_own_package():
     root = Path(__file__).resolve().parents[1] / "legacy_pilot" / "rca_reasoning_engine"
     allowed_legacy_prefixes = (
@@ -256,6 +267,255 @@ def test_qwen_adapter_rejects_unknown_evidence_ids():
 
     assert "unknown evidence_ids" in excinfo.value.message
     assert "EV-UNKNOWN" in excinfo.value.message
+
+
+def test_qwen_adapter_retries_once_when_real_api_returns_invalid_shape():
+    requests = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append(body)
+        if len(requests) == 1:
+            content = (
+                '{"hypotheses":[{"summary":"datasetId guard missing",'
+                '"evidence_ids":["EV-CODE-1"],"confidence":0.7}],'
+                '"selected_root_cause":{"summary":"datasetId guard missing",'
+                '"evidence_ids":["EV-CODE-1"],"confidence":0.7},'
+                '"suggested_fix":"Add validation",'
+                '"migration_impact":{"summary":"endpoint needs regression",'
+                '"evidence_ids":["EV-CODE-1"],"confidence":0.6},'
+                '"migration_checklist":[],"affected_path":[],'
+                '"open_questions":[],"confidence":0.7}'
+            )
+        else:
+            content = (
+                '{"hypotheses":[{"summary":"datasetId guard missing",'
+                '"evidence_ids":["EV-CODE-1"],"confidence":0.7}],'
+                '"selected_root_cause":{"summary":"datasetId guard missing",'
+                '"evidence_ids":["EV-CODE-1"],"confidence":0.7},'
+                '"suggested_fix":[{"summary":"add validation",'
+                '"evidence_ids":["EV-CODE-1"],"confidence":0.7}],'
+                '"migration_impact":{"summary":"endpoint needs regression",'
+                '"evidence_ids":["EV-CODE-1"],"confidence":0.6},'
+                '"migration_checklist":["add regression"],'
+                '"affected_path":[],"open_questions":[],"confidence":0.7}'
+            )
+        return {"choices": [{"message": {"content": content}}]}
+
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+    )
+
+    report = adapter.generate_rca(
+        evidence_bundle(code_evidence=[evidence_ref("EV-CODE-1", "code")])
+    )
+
+    assert len(requests) == 2
+    assert "suggested_fix must be an object" in requests[1]["messages"][1]["content"]
+    assert report.suggested_fix[0].summary == "add validation"
+
+
+def test_qwen_adapter_repairs_invalid_json_and_records_metadata():
+    requests = []
+    observed_metadata = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append(body)
+        content = "this is not json" if len(requests) == 1 else valid_qwen_content()
+        return {"choices": [{"message": {"content": content}}]}
+
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+        metadata_recorder=observed_metadata.append,
+    )
+
+    report = adapter.generate_rca(
+        evidence_bundle(code_evidence=[evidence_ref("EV-CODE-1", "code")])
+    )
+
+    assert len(requests) == 2
+    assert "non-JSON content" in requests[1]["messages"][1]["content"]
+    assert report.selected_root_cause.summary == "datasetId guard missing"
+    assert observed_metadata[-1]["attempts"] == 2
+    assert observed_metadata[-1]["repair_attempts"] == 1
+    assert (
+        observed_metadata[-1]["last_error"]
+        == "Qwen RCA backend returned non-JSON content."
+    )
+    assert "api_key" not in observed_metadata[-1]
+    assert "Authorization" not in observed_metadata[-1]
+
+
+def test_qwen_adapter_repairs_multiple_schema_failures_with_default_limit():
+    requests = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append(body)
+        if len(requests) == 1:
+            content = valid_qwen_content(suggested_fix='"Add validation"')
+        elif len(requests) == 2:
+            content = valid_qwen_content(
+                migration_impact='[{"summary":"not an object",'
+                '"evidence_ids":["EV-CODE-1"],"confidence":0.6}]'
+            )
+        else:
+            content = valid_qwen_content()
+        return {"choices": [{"message": {"content": content}}]}
+
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+    )
+
+    report = adapter.generate_rca(
+        evidence_bundle(code_evidence=[evidence_ref("EV-CODE-1", "code")])
+    )
+
+    assert len(requests) == 3
+    assert "suggested_fix must be an object" in requests[1]["messages"][1]["content"]
+    assert "migration_impact must be an object" in requests[2]["messages"][1]["content"]
+    assert report.suggested_fix[0].summary == "add validation"
+
+
+def test_qwen_adapter_repairs_invalid_numeric_schema_error():
+    requests = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append(body)
+        if len(requests) == 1:
+            content = valid_qwen_content(
+                suggested_fix='[{"summary":"add validation",'
+                '"evidence_ids":["EV-CODE-1"],"confidence":"high"}]'
+            )
+        else:
+            content = valid_qwen_content()
+        return {"choices": [{"message": {"content": content}}]}
+
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+    )
+
+    report = adapter.generate_rca(
+        evidence_bundle(code_evidence=[evidence_ref("EV-CODE-1", "code")])
+    )
+
+    assert len(requests) == 2
+    repair_prompt = requests[1]["messages"][1]["content"]
+    assert "could not convert string to float" in repair_prompt
+    assert report.suggested_fix[0].summary == "add validation"
+
+
+def test_qwen_adapter_exhausts_numeric_schema_repair_limit_as_rca_error():
+    requests = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append(body)
+        return {"choices": [{"message": {"content": valid_qwen_content(confidence='"high"')}}]}
+
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+        max_repair_attempts=1,
+    )
+
+    with pytest.raises(RCAGenerationError) as excinfo:
+        adapter.generate_rca(
+            evidence_bundle(code_evidence=[evidence_ref("EV-CODE-1", "code")])
+        )
+
+    message = excinfo.value.message
+    assert len(requests) == 2
+    assert "attempts=2" in message
+    assert "repair_attempts=1" in message
+    assert "last_error=" in message
+    assert "could not convert string to float" in message
+
+
+def test_qwen_adapter_exhausts_repair_limit_with_attempts_and_last_error():
+    requests = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append(body)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": valid_qwen_content(suggested_fix='"Add validation"')
+                    }
+                }
+            ]
+        }
+
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+        max_repair_attempts=1,
+    )
+
+    with pytest.raises(RCAGenerationError) as excinfo:
+        adapter.generate_rca(
+            evidence_bundle(code_evidence=[evidence_ref("EV-CODE-1", "code")])
+        )
+
+    message = excinfo.value.message
+    assert len(requests) == 2
+    assert "attempts=2" in message
+    assert "repair_attempts=1" in message
+    assert "last_error=suggested_fix must be an object." in message
+
+
+def test_qwen_adapter_caps_configured_repair_attempts():
+    requests = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append(body)
+        return {"choices": [{"message": {"content": "not json"}}]}
+
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+        max_repair_attempts=99,
+    )
+
+    with pytest.raises(RCAGenerationError) as excinfo:
+        adapter.generate_rca(
+            evidence_bundle(code_evidence=[evidence_ref("EV-CODE-1", "code")])
+        )
+
+    assert len(requests) == 4
+    assert "attempts=4" in excinfo.value.message
+
+
+def valid_qwen_content(
+    *,
+    suggested_fix: str | None = None,
+    migration_impact: str | None = None,
+    confidence: str = "0.7",
+) -> str:
+    suggested_fix = suggested_fix or (
+        '[{"summary":"add validation",'
+        '"evidence_ids":["EV-CODE-1"],"confidence":0.7}]'
+    )
+    migration_impact = migration_impact or (
+        '{"summary":"endpoint needs regression",'
+        '"evidence_ids":["EV-CODE-1"],"confidence":0.6}'
+    )
+    return (
+        '{"hypotheses":[{"summary":"datasetId guard missing",'
+        '"evidence_ids":["EV-CODE-1"],"confidence":0.7}],'
+        '"selected_root_cause":{"summary":"datasetId guard missing",'
+        '"evidence_ids":["EV-CODE-1"],"confidence":0.7},'
+        '"suggested_fix":'
+        + suggested_fix
+        + ',"migration_impact":'
+        + migration_impact
+        + ',"migration_checklist":["add regression"],'
+        '"affected_path":[],"open_questions":[],"confidence":'
+        + confidence
+        + "}"
+    )
 
 
 def evidence_ref(evidence_id: str, source_type: str) -> EvidenceRef:

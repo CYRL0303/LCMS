@@ -23,7 +23,7 @@ testpaths = ["tests"]
 markers = [
   "gitnexus_integration: requires local GitNexus runtime and is skipped by default",
   "postgres_graph_store: requires PostgreSQL and is skipped by default",
-  "real_structure1_structure2_e2e: requires GitNexus runtime and PostgreSQL graph store; skipped by default",
+  "real_structure1_structure2_e2e: requires GitNexus runtime, PostgreSQL graph store, Structure2 graph_context, and Structure3 Qwen RCA; skipped by default",
   "structure1_production: runs full Structure 1 Java/Spring fixture coverage",
   "slow: longer-running integration or performance tests",
   "qwen_semantic_integration: requires DashScope Qwen API access and is skipped by default",

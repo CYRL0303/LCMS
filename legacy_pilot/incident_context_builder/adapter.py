@@ -20,6 +20,11 @@ from legacy_pilot.incident_context_builder.evidence_builder import (
 from legacy_pilot.incident_context_builder.signals import parse_alert_event
 
 
+INCIDENT_CONTEXT_BACKEND_ENV = "LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND"
+DEFAULT_INCIDENT_CONTEXT_BACKEND = "graph_context"
+ALLOWED_INCIDENT_CONTEXT_BACKENDS = ("graph_context", "mock")
+
+
 class IncidentContextBuilderAdapter(ABC):
     @abstractmethod
     def submit_alert(self, alert: AlertEvent) -> IncidentQuery:
@@ -201,8 +206,8 @@ def create_incident_context_builder_adapter(
 ) -> IncidentContextBuilderAdapter:
     selected_backend = (
         backend
-        or os.getenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND")
-        or "mock"
+        or os.getenv(INCIDENT_CONTEXT_BACKEND_ENV)
+        or DEFAULT_INCIDENT_CONTEXT_BACKEND
     )
     normalized = selected_backend.strip().lower()
     if normalized == "mock":
@@ -217,4 +222,8 @@ def create_incident_context_builder_adapter(
             query_graph=query_graph,
             find_similar_incidents=find_similar_incidents,
         )
-    return MockIncidentContextBuilderAdapter(now=now)
+    allowed = ", ".join(ALLOWED_INCIDENT_CONTEXT_BACKENDS)
+    raise ValueError(
+        f"Unsupported incident context backend: {selected_backend}. "
+        f"Allowed values: {allowed}."
+    )
