@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 .venv/
+.env
+.env.*
+!.env.example
 uvicorn*.log
 tests/fixtures/java_spring_demo/.gitnexus/
 tests/fixtures/java_spring_production_demo/.gitnexus/

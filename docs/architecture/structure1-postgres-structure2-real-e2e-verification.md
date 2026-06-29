@@ -42,10 +42,16 @@ python -m pytest tests/test_postgres_graph_store_integration.py -q -rs
 1 passed
 ```
 
-一条龙脚本 sentinel：
+历史一条龙脚本 sentinel：
 
 ```text
 E2E_REAL_GITNEXUS_POSTGRES_STRUCTURE2_PASS
+```
+
+现在这条链路已沉淀为仓库内 opt-in pytest：
+
+```text
+tests/test_real_structure1_structure2_e2e.py
 ```
 
 PostgreSQL row 证据：
@@ -70,13 +76,19 @@ record: INC-ALERT-PG-GITNEXUS-E2E, confirmed_by_user=True, 6 evidence_refs
 
 ### Python 依赖
 
-真实 PostgreSQL graph store 需要 `psycopg`：
+真实 PostgreSQL graph store 需要 `psycopg`。当前已在 `pyproject.toml` 主依赖声明：
+
+```toml
+psycopg[binary]>=3.2.0
+```
+
+如果本机环境尚未安装项目依赖，可临时执行：
 
 ```powershell
 python -m pip install "psycopg[binary]"
 ```
 
-这是后续产品运行也需要的依赖，除非产品换成别的 PostgreSQL driver。
+这是后续产品运行也需要的依赖，除非产品换成别的 PostgreSQL driver。不要只依赖手动安装，依赖声明必须保留在项目配置中。
 
 ### GitNexus runtime
 
@@ -100,7 +112,13 @@ node "Q:\Hackathons\GitNexus-main\GitNexus-main\gitnexus\dist\cli\index.js" %*
 
 ### PostgreSQL
 
-本次验证使用 Docker Desktop 临时 PostgreSQL：
+本地 E2E 验证使用仓库内 `docker-compose.e2e.yml` 启动临时 PostgreSQL：
+
+```powershell
+docker compose -f docker-compose.e2e.yml up -d postgres
+```
+
+等价的手动命令是：
 
 ```powershell
 docker run --name legacy-pilot-pg-e2e `
@@ -128,6 +146,12 @@ $env:LEGACY_PILOT_GRAPH_STORE_TABLE='legacy_pilot_graph_payloads_e2e_full'
 清理临时容器：
 
 ```powershell
+docker compose -f docker-compose.e2e.yml down
+```
+
+如果使用手动 `docker run`，则执行：
+
+```powershell
 docker rm -f legacy-pilot-pg-e2e
 ```
 
@@ -138,7 +162,9 @@ docker rm -f legacy-pilot-pg-e2e
 真实链路需要同时启用：
 
 ```powershell
+$env:LEGACY_PILOT_RUN_REAL_E2E='1'
 $env:LEGACY_PILOT_CODE_CORE_BACKEND='gitnexus_cli'
+$env:LEGACY_PILOT_GRAPH_STORE_BACKEND='postgresql'
 $env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='graph_context'
 ```
 
@@ -147,6 +173,9 @@ $env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='graph_context'
 - `LEGACY_PILOT_CODE_CORE_BACKEND=gitnexus_cli`：Structure1 使用真实 GitNexus CLI。
 - `LEGACY_PILOT_GRAPH_STORE_BACKEND=postgresql`：Structure1 `IndexRepo` 保存 graph payload，`QueryGraph` 在无进程内 index 时可恢复。
 - `LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND=graph_context`：Structure2 通过中间件内部 `QueryGraph` 消费 `GraphContext`。
+- `LEGACY_PILOT_RUN_REAL_E2E=1`：显式打开真实 Structure1/PostgreSQL/Structure2 端到端测试；默认不打开。
+
+完整本地变量模板见仓库根目录 `.env.example`。真实凭据写入本机 `.env`，不要提交。
 
 ## 真实验证步骤
 
@@ -193,7 +222,25 @@ EPERM: operation not permitted, open 'C:\Users\Administrator\.gitnexus\registry.
 
 ### 3. 验证一条龙恢复和 Structure2 调用
 
-本次脚本执行的关键动作：
+当前仓库内测试：
+
+```powershell
+$env:LEGACY_PILOT_RUN_REAL_E2E='1'
+$env:LEGACY_PILOT_CODE_CORE_BACKEND='gitnexus_cli'
+$env:LEGACY_PILOT_GRAPH_STORE_BACKEND='postgresql'
+$env:LEGACY_PILOT_GRAPH_STORE_DSN='postgresql://legacy_pilot:legacy_pilot@127.0.0.1:55432/legacy_pilot?connect_timeout=5'
+$env:LEGACY_PILOT_GRAPH_STORE_TABLE='legacy_pilot_graph_payloads_e2e'
+$env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='graph_context'
+$env:GITNEXUS_BIN='<product-or-local-gitnexus-cli>'
+$env:GITNEXUS_REPO_ROOT='<gitnexus-runtime-root-if-required>'
+$env:GITNEXUS_INDEX_TIMEOUT_SECONDS='120'
+$env:GITNEXUS_QUERY_TIMEOUT_SECONDS='30'
+python -m pytest tests/test_real_structure1_structure2_e2e.py -q -rs
+```
+
+未设置 `LEGACY_PILOT_RUN_REAL_E2E=1` 时，真实 E2E 测试会 skip，只运行 skip-reason 契约测试。
+
+测试执行的关键动作：
 
 1. 使用真实 `GitNexusCliCodeKnowledgeCoreAdapter.index_repo()` 生成 `GraphSnapshot`。
 2. 由 `PostgresGraphStore.save_payload()` 写入 PostgreSQL。
@@ -221,10 +268,16 @@ record.confirmed_by_user is True
 record.evidence_refs
 ```
 
-成功输出：
+历史内联脚本成功输出：
 
 ```text
 E2E_REAL_GITNEXUS_POSTGRES_STRUCTURE2_PASS
+```
+
+当前 pytest 预期：
+
+```text
+2 passed
 ```
 
 ### 4. 确认 PostgreSQL row
@@ -317,19 +370,19 @@ Structure2、RCA、Memory 不应共享 Structure1 内部 PostgreSQL 连接或 Gi
 - 删掉固定端口 `127.0.0.1:55432`；产品 DSN 由环境或 secret 注入。
 - 删掉测试表 `legacy_pilot_graph_payloads_e2e_full` 的产品语义；产品使用正式迁移管理的表名。
 - 删掉明文 demo 密码作为产品配置；示例可以保留占位符，真实部署必须用 secret。
-- 删掉内联 Python 一条龙脚本作为唯一验证方式；它要转成仓库内 opt-in pytest。
+- 删掉内联 Python 一条龙脚本作为唯一验证方式；当前已转成仓库内 opt-in pytest。
 - 删掉本机提权运行作为前提；产品运行账号要有明确、最小、可审计权限。
 - 删掉对 pytest cache warning 的接受标准；warning 可以记录，但不能当成产品健康信号。
 
 ### 临时验证项要怎么产品化
 
-- `psycopg[binary]`：加入项目依赖或 PostgreSQL optional extra，不能只靠手动 `pip install`。
-- 临时 PostgreSQL 容器：沉淀成 `docker-compose.e2e.yml` 或 CI service，用于开发/CI 验证，不用于生产。
+- `psycopg[binary]`：已加入项目依赖，不能只靠手动 `pip install`。
+- 临时 PostgreSQL 容器：已沉淀成 `docker-compose.e2e.yml`，用于开发/CI 验证，不用于生产。
 - GitNexus wrapper：替换成正式 runtime 发现机制，例如 `GITNEXUS_BIN` 指向发布包，或 Structure1 调用 GitNexus 服务 API。
 - 本机 GitNexus cache/registry：改成可配置目录，并在部署文档写明读写权限。
-- 一条龙脚本：转成 `tests/test_real_structure1_structure2_e2e.py`，默认 skip，只有 `LEGACY_PILOT_RUN_REAL_E2E=1` 时执行。
+- 一条龙脚本：已转成 `tests/test_real_structure1_structure2_e2e.py`，默认 skip，只有 `LEGACY_PILOT_RUN_REAL_E2E=1` 时执行。
 - 测试表：测试中使用专用表名或测试 database/schema，执行后清理，避免污染产品数据。
-- 环境变量：补 `.env.example` 和部署文档，区分 dev/test/prod。
+- 环境变量：已补 `.env.example`；后续部署文档仍需区分 dev/test/prod。
 - 数据库表：补迁移/init 策略，明确 schema、索引、唯一键、latest graph 语义和历史版本策略。
 - PostgreSQL 启动检查：CI/dev 可以用 `pg_isready`；产品应接入健康检查和重试策略。
 
@@ -354,7 +407,7 @@ Structure2、RCA、Memory 不应共享 Structure1 内部 PostgreSQL 连接或 Gi
 - `legacy_pilot_graph_payloads_e2e_full` 测试表。
 - `Q:\tmp\gitnexus-local.cmd` wrapper。
 - `Q:\Hackathons\GitNexus-main\GitNexus-main\gitnexus` 本机 checkout 路径。
-- 内联 Python E2E script。
+- 历史内联 Python E2E script；当前应使用 `tests/test_real_structure1_structure2_e2e.py`。
 - pytest cache warnings。
 - 本机提权运行。
 
@@ -385,8 +438,17 @@ LEGACY_PILOT_GRAPH_STORE_TABLE=<managed table>
 LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND=graph_context
 GITNEXUS_BIN=<product runtime path>
 GITNEXUS_REPO_ROOT=<product runtime path if CLI requires it>
+GITNEXUS_TIMEOUT_SECONDS=<configured>
 GITNEXUS_INDEX_TIMEOUT_SECONDS=<configured>
 GITNEXUS_QUERY_TIMEOUT_SECONDS=<configured>
+```
+
+本地真实 E2E 验证还需要额外打开：
+
+```text
+LEGACY_PILOT_RUN_REAL_E2E=1
+LEGACY_PILOT_RUN_POSTGRES_GRAPH_STORE=1
+LEGACY_PILOT_RUN_GITNEXUS_INTEGRATION=1
 ```
 
 ## 当前结论

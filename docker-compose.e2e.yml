@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: legacy-pilot-pg-e2e
+    environment:
+      POSTGRES_USER: legacy_pilot
+      POSTGRES_PASSWORD: legacy_pilot
+      POSTGRES_DB: legacy_pilot
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legacy_pilot -d legacy_pilot"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
