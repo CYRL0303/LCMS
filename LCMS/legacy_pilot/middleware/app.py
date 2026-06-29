@@ -113,4 +113,10 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+from legacy_pilot.code_knowledge_core.adapter import create_code_knowledge_core_adapter
+
+app = create_app(
+    router=MiddlewareRouter(
+        code_knowledge_core_adapter=create_code_knowledge_core_adapter()
+    )
+)
