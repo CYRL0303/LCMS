@@ -24,42 +24,42 @@ SubmitAlert
 
 ## Current Progress
 
-Structure 1 is implemented through Milestone5 while preserving the middleware
-contract boundary:
+Structure 1-3 are wired through the middleware contract with real opt-in
+integration coverage:
 
-- Milestone0-2: real `gitnexus_cli` indexing/query integration plus Structure 1
-  enrichment for MyBatis SQL, tables, Java config, and Java exceptions.
-- Milestone3: query planner and local enriched graph index for endpoint,
-  method/symbol, table, config, and exception contexts.
-- Milestone4: semantic graph enrichment is disabled by default, has a
-  deterministic mock backend, and supports opt-in DashScope Qwen API semantic
-  summaries through `qwen_api`.
-- Milestone5: production hardening validates local repo paths before GitNexus
-  analyze, supports stable-index reuse, separates index/query timeouts, and
-  documents default/integration CI profiles.
-- Structure 1 graph persistence is disabled by default, supports opt-in
-  PostgreSQL payload storage, and restores `QueryGraph` from PostgreSQL only
-  for locally queryable plans with no process-local index.
-- Structure 2 now has an `IncidentContextBuilderAdapter` boundary. It defaults
-  to the `graph_context` backend that builds `EvidenceBundle` from Structure 1
-  `GraphContext`, with deterministic `mock` kept as an explicit test/demo
-  backend.
+- Structure 1 uses real `gitnexus_cli` indexing/query integration, MyBatis SQL
+  extraction, table/config/exception evidence, local graph indexing, and
+  optional PostgreSQL graph payload persistence.
+- Structure 1 semantic enrichment remains disabled by default, with explicit
+  deterministic `mock` and opt-in real DashScope Qwen `qwen_api` modes.
+- Structure 2 owns `IncidentContextBuilderAdapter`. Default backend is
+  `graph_context`, which builds `EvidenceBundle` from Structure 1
+  `GraphContext`. Unknown backends fail loudly; deterministic `mock` is
+  explicit test/demo mode only.
+- Structure 3 owns `RCAReasoningEngineAdapter`. Default backend is real
+  DashScope Qwen `qwen_api`; no default mock RCA path remains in middleware.
+- Structure 3 enforces evidence-backed RCA output, rejects unknown evidence
+  IDs, retries invalid JSON/schema Qwen responses with bounded repair prompts,
+  and records retry metadata without storing secrets.
+- Middleware routes SubmitAlert -> EvidenceBundle -> RCA generation/review ->
+  incident save through Structure2 and Structure3 boundaries, converting
+  lower-structure failures into `ContractError` envelopes.
+- Reusable PowerShell scripts start Docker Desktop/PostgreSQL, load the
+  persisted Qwen key, and run the real GitNexus + PostgreSQL + Structure2 +
+  Structure3 E2E chain.
 - Production fixture coverage proves `/api/dataset/version -> controller ->
   service -> mapper -> Mapper XML SQL -> dataset_version`, plus config and
   exception evidence.
-- Middleware/router and the four-structure contract models were not changed for
-  Milestone0-5 beyond backward-compatible Structure 1 metadata fields already
-  present on `GraphSnapshot`; Structure 2 adds optional `graph_id` on
-  `AlertEvent` and `IncidentQuery`.
 
 Latest local verification:
 
 ```text
-Default suite: 170 passed, 7 skipped, 1 warning
-Structure 1 production fixture: 5 passed, 2 skipped
-PostgreSQL graph store default profile: 7 passed, 1 skipped
-Real GitNexus opt-in suite: 12 passed
-Real Qwen semantic opt-in test: 1 passed, 2 pytest cache warnings
+Default suite: 205 passed, 8 skipped, 1 warning
+Real Structure1/PostgreSQL/Structure2/Structure3 E2E: 3 passed, 2 warnings
+Real GitNexus + Structure1 production fixture: 12 passed, 2 warnings
+Real PostgreSQL graph store integration: 1 passed, 2 warnings
+Real Qwen semantic integration: 1 passed, 2 warnings
+Secret scan: no persisted Qwen key in repository
 ```
 
 ## Repository Layout
