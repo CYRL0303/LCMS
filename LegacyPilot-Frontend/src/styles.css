@@ -786,6 +786,8 @@ h1 {
   padding-left: 20px;
   color: #53646f;
   line-height: 1.45;
+  /* 下面这行是修复溢出的关键代码 */
+  overflow-wrap: anywhere; 
 }
 
 .evidence-list {
@@ -992,6 +994,7 @@ h1 {
   opacity: 0;
 }
 
+/* 1. 边栏总容器：开启大滚动条，强制纯白背景防文字穿透重影 */
 .agent-drawer {
   position: fixed;
   top: 0;
@@ -1001,13 +1004,14 @@ h1 {
   width: min(430px, 100vw);
   height: 100vh;
   flex-direction: column;
-  gap: 18px;
   padding: 20px;
   border-left: 1px solid #d8e0e4;
-  background: rgba(255, 255, 255, 0.98);
+  background: #ffffff; /* 关键：改成纯白，防止滑动时透明发灰 */
   box-shadow: -28px 0 54px rgba(33, 46, 53, 0.14);
   transform: translateX(105%);
   transition: transform 220ms ease;
+  
+  overflow-y: auto; /* 关键：开启唯一大滚动条 */
 }
 
 .agent-resize-handle {
@@ -1039,14 +1043,19 @@ body.is-resizing-agent .agent-resize-handle::after {
   transform: translateX(0);
 }
 
+/* 2. 头部标题：始终吸附在最顶端 */
 .agent-drawer-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid #e0e6e9;
+  order: 1; /* 排在第 1 位 */
+  position: sticky;
+  top: -20px;
+  margin-top: -20px;
+  padding-top: 20px;
+  background: #ffffff;
+  z-index: 20;
 }
+
+.agent-context { order: 2; }
+.agent-welcome { order: 3; }
 
 .agent-drawer-header h3 {
   margin-top: 5px;
@@ -1134,36 +1143,42 @@ body.is-resizing-agent .agent-resize-handle::after {
   line-height: 1.6;
 }
 
+/* --- 优化后的推荐对话框样式 --- */
 .prompt-list {
-  display: grid;
-  gap: 10px;
+  order: 5; 
+  margin-top: 16px;
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column; /* 让按钮竖向排列 */
+  gap: 8px; /* 按钮之间的间距调小 */
 }
 
 .prompt-list button {
-  min-height: 42px;
-  padding: 0 12px;
-  border: 1px solid #dfe7ea;
-  border-radius: 8px;
-  color: #30454f;
-  background: #ffffff;
-  cursor: pointer;
+  font-size: 12.5px; /* 关键：字体调小 */
+  color: #1f686d; /* 采用品牌主题色 */
+  background: #f2f8f9;
+  border: 1px solid #d4e7e8;
+  border-radius: 6px;
+  padding: 8px 12px;
   text-align: left;
-  transition:
-    border-color 160ms ease,
-    background 160ms ease,
-    color 160ms ease;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
 .prompt-list button:hover {
-  border-color: #a8c8cb;
-  color: #174f54;
-  background: #f3fafb;
+  background: #e2f1f2;
+  border-color: #1a565a;
+  color: #134246;
 }
 
+/* 3. 聊天记录区：去掉小滚动条，高度自然撑开，并提到了推荐框上方 */
 .agent-chat {
-  flex: 1;
-  min-height: 120px;
-  overflow: auto;
+  order: 4; /* 排在第 4 位（提到了推荐框的上面！） */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px;
+  margin-top: 16px;
 }
 
 .agent-message {
@@ -1184,16 +1199,22 @@ body.is-resizing-agent .agent-resize-handle::after {
   color: #53646f;
   font-size: 13px;
   line-height: 1.6;
+  /* --- 下面这两行是修复溢出的关键 --- */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
+/* 5. 底部输入框：始终吸附在最底端 */
 .agent-composer {
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) 36px;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid #d8e0e4;
-  border-radius: 8px;
+  order: 6; /* 排在最后 */
+  position: sticky;
+  bottom: -20px;
+  margin-top: auto; /* 就算内容很少，也把它压在最底下 */
+  margin-bottom: -20px;
+  padding-top: 16px;
+  padding-bottom: 20px;
   background: #ffffff;
+  z-index: 20;
 }
 
 .agent-composer button {
@@ -1223,6 +1244,132 @@ body.is-resizing-agent .agent-resize-handle::after {
 .agent-composer input::placeholder {
   color: #9aa6ad;
 }
+
+/* --- 补充的 Agent Chat 样式 --- */
+.agent-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px;
+}
+
+.agent-message {
+  padding: 13px;
+  border: 1px solid #e0e6e9;
+  border-radius: 8px;
+  background: #fbfcfd;
+  width: 90%;
+}
+
+.agent-message.user-message {
+  align-self: flex-end;
+  background: #e7f2f3;
+  border-color: #c4dfe2;
+}
+
+.agent-message.user-message strong {
+  color: #1a565a;
+}
+
+.agent-message.user-message p {
+  color: #2f494c;
+}
+
+.agent-composer button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* --- 登录弹窗 (Login Modal) 样式 --- */
+.modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(18, 30, 36, 0.6);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+  padding: 20px;
+}
+
+.modal-content {
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 24px 48px rgba(23, 32, 38, 0.16);
+  width: 100%;
+  max-width: 400px;
+  overflow: hidden;
+  animation: modalFadeIn 0.2s ease-out forwards;
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid #e1e7ea;
+}
+
+.modal-header h3 {
+  margin: 0; font-size: 18px; color: #172026;
+}
+
+.modal-close {
+  display: grid; place-items: center;
+  width: 32px; height: 32px;
+  border: 0; background: transparent;
+  color: #65757f; border-radius: 6px; cursor: pointer;
+  transition: all 0.15s ease;
+}
+.modal-close:hover { background: #f0f4f5; color: #172026; }
+
+.modal-body { padding: 24px; }
+
+.login-provider-group { display: grid; gap: 12px; }
+
+.provider-btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: 100%; min-height: 44px; border-radius: 8px;
+  font-size: 14px; font-weight: 600; cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.github-btn { background: #24292e; color: #ffffff; border: 1px solid #24292e; }
+.github-btn:hover { background: #1b1f23; }
+
+.google-btn { background: #ffffff; color: #3c4043; border: 1px solid #d8e0e4; }
+.google-btn:hover { background: #f8fbfc; border-color: #c9d3d8; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+
+.login-divider { position: relative; text-align: center; margin: 24px 0; }
+.login-divider::before {
+  content: ""; position: absolute;
+  top: 50%; left: 0; right: 0;
+  height: 1px; background: #e1e7ea; z-index: 1;
+}
+.login-divider span {
+  position: relative; z-index: 2;
+  background: #ffffff; padding: 0 12px;
+  color: #71818b; font-size: 12px; font-weight: 600;
+}
+
+.login-form .form-group { display: grid; gap: 6px; margin-bottom: 16px; }
+.login-form label { font-size: 13px; font-weight: 700; color: #30454f; }
+.login-form input {
+  width: 100%; min-height: 42px; padding: 0 12px;
+  border: 1px solid #cfd9de; border-radius: 8px;
+  color: #22323b; background: #ffffff; outline: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.login-form input:focus {
+  border-color: #1f686d;
+  box-shadow: 0 0 0 3px rgba(31, 104, 109, 0.14);
+}
+.full-width { width: 100%; justify-content: center; }
 
 @media (max-width: 1020px) {
   .app-shell {
