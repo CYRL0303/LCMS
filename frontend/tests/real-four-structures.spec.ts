@@ -7,6 +7,8 @@ test.skip(
   "Set LEGACY_PILOT_RUN_REAL_FRONTEND_E2E=1 to run real browser E2E.",
 );
 
+const SETTINGS_STORAGE_KEY = "legacyPilot.workbench.settings.v1";
+
 test("runs the real four-structure incident pipeline from the workbench", async ({
   page,
 }) => {
@@ -20,6 +22,9 @@ test("runs the real four-structure incident pipeline from the workbench", async 
   );
   const repoId = `repo-frontend-e2e-${Date.now()}`;
 
+  await page.addInitScript((storageKey) => {
+    window.localStorage.removeItem(storageKey);
+  }, SETTINGS_STORAGE_KEY);
   await page.goto("/");
 
   await expect(page.getByText("legacy-pilot-interface-contract-middleware")).toBeVisible({
@@ -30,6 +35,21 @@ test("runs the real four-structure incident pipeline from the workbench", async 
   await expect(page.getByText(/S2\s+graph_context/)).toBeVisible();
   await expect(page.getByText(/S3\s+qwen_api/)).toBeVisible();
   await expect(page.getByText(/S4\s+postgresql/)).toBeVisible();
+
+  await page.getByTestId("settings-button").click();
+  await expect(page.getByTestId("settings-modal")).toBeVisible();
+  await page.getByTestId("qwen-api-key-input").fill("sk-local-ui-test");
+  await page.getByTestId("github-token-input").fill("github_pat_local_ui_test");
+  await page.getByTestId("gitlab-token-input").fill("glpat-local-ui-test");
+  await page.getByTestId("settings-modal").getByRole("button", { name: /^Save$/ }).click();
+  await expect(page.getByTestId("settings-modal")).toBeHidden();
+  await page.reload();
+  await page.getByTestId("settings-button").click();
+  await expect(page.getByTestId("qwen-api-key-input")).toHaveValue("sk-local-ui-test");
+  await expect(page.getByTestId("github-token-input")).toHaveValue("github_pat_local_ui_test");
+  await expect(page.getByTestId("gitlab-token-input")).toHaveValue("glpat-local-ui-test");
+  await page.getByTestId("settings-modal").getByRole("button", { name: /^Clear$/ }).click();
+  await page.getByTestId("settings-modal").getByRole("button", { name: /^Save$/ }).click();
 
   await page.getByLabel("Repo ID").fill(repoId);
   await page.getByTestId("repo-uri-input").fill(pathToFileURL(fixtureRoot).href);

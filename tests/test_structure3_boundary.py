@@ -13,6 +13,7 @@ from legacy_pilot.contracts.models import (
     IncidentQuery,
     RCAReport,
 )
+from legacy_pilot.contracts.runtime_credentials import RuntimeCredentials, use_runtime_credentials
 from legacy_pilot.rca_reasoning_engine.errors import (
     RCAGenerationError,
     RCAEvidenceRequiredError,
@@ -231,6 +232,25 @@ def test_qwen_adapter_maps_real_api_shape_to_evidence_backed_report():
         "EV-LOG-1",
     ]
     assert report.confidence == 0.5
+
+
+def test_qwen_adapter_uses_request_scoped_api_key(monkeypatch):
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    requests = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append({"headers": headers, "body": body})
+        return {"choices": [{"message": {"content": valid_qwen_content()}}]}
+
+    adapter = QwenApiRCAReasoningEngineAdapter(http_post=fake_post)
+
+    with use_runtime_credentials(RuntimeCredentials(qwen_api_key="runtime-key")):
+        report = adapter.generate_rca(
+            evidence_bundle(code_evidence=[evidence_ref("EV-CODE-1", "code")])
+        )
+
+    assert requests[0]["headers"]["Authorization"] == "Bearer runtime-key"
+    assert report.selected_root_cause.summary == "datasetId guard missing"
 
 
 def test_qwen_adapter_rejects_unknown_evidence_ids():

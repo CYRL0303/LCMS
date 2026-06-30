@@ -5,6 +5,8 @@ from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from legacy_pilot.contracts.runtime_credentials import current_runtime_credentials
+
 
 SEMANTIC_BACKEND_ENV = "LEGACY_PILOT_SEMANTIC_BACKEND"
 SEMANTIC_CONFIDENCE_CAP_ENV = "LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP"
@@ -53,7 +55,11 @@ class QwenApiSemanticEnricher:
         return f"qwen_api:{self.model}"
 
     def enrich(self, nodes: list[dict[str, Any]]) -> dict[str, Any]:
-        api_key = self.api_key or os.getenv(DASHSCOPE_API_KEY_ENV)
+        api_key = (
+            self.api_key
+            or current_runtime_credentials().qwen_api_key
+            or os.getenv(DASHSCOPE_API_KEY_ENV)
+        )
         if not api_key:
             raise ValueError(
                 "DASHSCOPE_API_KEY is required for qwen_api semantic backend."

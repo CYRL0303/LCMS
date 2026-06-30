@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -18,8 +18,26 @@ from legacy_pilot.contracts.models import (
     ReviewedRCAReport,
     SaveIncidentRequest,
 )
+from legacy_pilot.contracts.runtime_credentials import (
+    RuntimeCredentials,
+    clean_secret,
+    use_runtime_credentials,
+)
 from legacy_pilot.contracts.validators import SUPPORTED_CONTRACT_VERSION
 from legacy_pilot.middleware.router import MiddlewareRouter
+
+
+def _runtime_credentials_from_headers(
+    *,
+    qwen_api_key: str | None = None,
+    github_token: str | None = None,
+    gitlab_token: str | None = None,
+) -> RuntimeCredentials:
+    return RuntimeCredentials(
+        qwen_api_key=clean_secret(qwen_api_key),
+        github_token=clean_secret(github_token),
+        gitlab_token=clean_secret(gitlab_token),
+    )
 
 
 def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
@@ -74,8 +92,19 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
         }
 
     @app.post("/v1/repos/index", response_model=GraphSnapshot)
-    async def index_repo(request: RepoIndexRequest) -> GraphSnapshot:
-        return middleware_router.index_repo(request)
+    async def index_repo(
+        request: RepoIndexRequest,
+        qwen_api_key: str | None = Header(default=None, alias="X-LegacyPilot-Qwen-Api-Key"),
+        github_token: str | None = Header(default=None, alias="X-LegacyPilot-GitHub-Token"),
+        gitlab_token: str | None = Header(default=None, alias="X-LegacyPilot-GitLab-Token"),
+    ) -> GraphSnapshot:
+        credentials = _runtime_credentials_from_headers(
+            qwen_api_key=qwen_api_key,
+            github_token=github_token,
+            gitlab_token=gitlab_token,
+        )
+        with use_runtime_credentials(credentials):
+            return middleware_router.index_repo(request)
 
     @app.post("/v1/graph/query", response_model=GraphContext)
     async def query_graph(query: GraphQuery) -> GraphContext:
@@ -94,8 +123,13 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
         return middleware_router.find_similar_incidents(query)
 
     @app.post("/v1/rca/generate", response_model=RCAReport)
-    async def generate_rca(bundle: EvidenceBundle) -> RCAReport:
-        return middleware_router.generate_rca(bundle)
+    async def generate_rca(
+        bundle: EvidenceBundle,
+        qwen_api_key: str | None = Header(default=None, alias="X-LegacyPilot-Qwen-Api-Key"),
+    ) -> RCAReport:
+        credentials = _runtime_credentials_from_headers(qwen_api_key=qwen_api_key)
+        with use_runtime_credentials(credentials):
+            return middleware_router.generate_rca(bundle)
 
     @app.post("/v1/rca/review", response_model=ReviewedRCAReport)
     async def review_rca(report: RCAReport) -> ReviewedRCAReport:

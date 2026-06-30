@@ -102,7 +102,7 @@ class GitNexusCliClient:
         except ValueError:
             raise self._error(
                 "index",
-                "repo_uri must resolve to a local filesystem path or GitHub URL.",
+                "repo_uri must resolve to a local filesystem path, GitHub URL, or GitLab URL.",
                 diagnostics={"repo_uri": repo_uri},
             ) from None
         except RepoImportError as exc:

@@ -2,6 +2,7 @@ import os
 
 import pytest
 
+from legacy_pilot.contracts.runtime_credentials import RuntimeCredentials, use_runtime_credentials
 from legacy_pilot.code_knowledge_core.semantic import (
     DisabledSemanticEnricher,
     QwenApiSemanticEnricher,
@@ -146,6 +147,23 @@ def test_qwen_api_semantic_enricher_creates_pending_summary_payload():
     assert payload["nodes"][0]["properties"]["prompt_version"] == "qwen_semantic_v1"
     assert payload["relationships"][0]["type"] == "HAS_SEMANTIC_ACTION"
     assert payload["relationships"][0]["confidence"] == 0.4
+
+
+def test_qwen_api_semantic_enricher_uses_request_scoped_api_key(monkeypatch):
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    requests = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append({"headers": headers, "body": body})
+        return {"choices": [{"message": {"content": "Request scoped summary."}}]}
+
+    enricher = QwenApiSemanticEnricher(http_post=fake_post)
+
+    with use_runtime_credentials(RuntimeCredentials(qwen_api_key="runtime-key")):
+        payload = enricher.enrich([_method_node()])
+
+    assert requests[0]["headers"]["Authorization"] == "Bearer runtime-key"
+    assert payload["nodes"][0]["excerpt"] == "Request scoped summary."
 
 
 def test_qwen_api_semantic_enricher_requires_api_key():

@@ -7,11 +7,15 @@ import {
   ClipboardList,
   Database,
   GitBranch,
+  Github,
+  Gitlab,
+  KeyRound,
   Loader2,
   Play,
   RotateCcw,
   Save,
   Server,
+  Settings,
   ShieldCheck,
   XCircle,
 } from "lucide-react";
@@ -24,6 +28,7 @@ import {
   isContractError,
   postJson,
 } from "./api";
+import type { RuntimeCredentials } from "./api";
 import {
   defaultAlert,
   defaultRepoRequest,
@@ -77,6 +82,14 @@ const stepOrder: StepKey[] = [
 
 type StepLogs = Record<StepKey, StepLog>;
 
+type WorkbenchSettings = {
+  qwenApiKey: string;
+  githubToken: string;
+  gitlabToken: string;
+};
+
+const SETTINGS_STORAGE_KEY = "legacyPilot.workbench.settings.v1";
+
 function initialStepLogs(): StepLogs {
   return stepOrder.reduce((logs, key) => {
     logs[key] = {
@@ -87,6 +100,58 @@ function initialStepLogs(): StepLogs {
     };
     return logs;
   }, {} as StepLogs);
+}
+
+function emptyWorkbenchSettings(): WorkbenchSettings {
+  return {
+    qwenApiKey: "",
+    githubToken: "",
+    gitlabToken: "",
+  };
+}
+
+function loadWorkbenchSettings(): WorkbenchSettings {
+  if (typeof window === "undefined") {
+    return emptyWorkbenchSettings();
+  }
+  const stored = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+  if (!stored) {
+    return emptyWorkbenchSettings();
+  }
+  try {
+    const parsed = JSON.parse(stored) as Partial<WorkbenchSettings>;
+    return {
+      qwenApiKey: typeof parsed.qwenApiKey === "string" ? parsed.qwenApiKey : "",
+      githubToken: typeof parsed.githubToken === "string" ? parsed.githubToken : "",
+      gitlabToken: typeof parsed.gitlabToken === "string" ? parsed.gitlabToken : "",
+    };
+  } catch {
+    return emptyWorkbenchSettings();
+  }
+}
+
+function saveWorkbenchSettings(settings: WorkbenchSettings) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const next = {
+    qwenApiKey: settings.qwenApiKey.trim(),
+    githubToken: settings.githubToken.trim(),
+    gitlabToken: settings.gitlabToken.trim(),
+  };
+  if (!next.qwenApiKey && !next.githubToken && !next.gitlabToken) {
+    window.localStorage.removeItem(SETTINGS_STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
+}
+
+function runtimeCredentials(settings: WorkbenchSettings): RuntimeCredentials {
+  return {
+    qwenApiKey: settings.qwenApiKey.trim() || undefined,
+    githubToken: settings.githubToken.trim() || undefined,
+    gitlabToken: settings.gitlabToken.trim() || undefined,
+  };
 }
 
 export function App() {
@@ -105,10 +170,24 @@ export function App() {
   const [incidentRecord, setIncidentRecord] = useState<IncidentRecord | null>(null);
   const [persistedIncidentRecord, setPersistedIncidentRecord] = useState<IncidentRecord | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<WorkbenchSettings>(loadWorkbenchSettings);
 
   useEffect(() => {
     void runHealth();
   }, []);
+
+  useEffect(() => {
+    saveWorkbenchSettings(settings);
+  }, [settings]);
+
+  const apiCredentials = useMemo(() => runtimeCredentials(settings), [settings]);
+  const apiOptions = useMemo(
+    () => ({
+      credentials: apiCredentials,
+    }),
+    [apiCredentials],
+  );
 
   const latestTraceId =
     incidentRecord?.incident_id && reviewedReport?.trace_id
@@ -136,7 +215,7 @@ export function App() {
     return runStep<HealthResponse>(
       "health",
       undefined,
-      () => getJson<HealthResponse>("/health"),
+      () => getJson<HealthResponse>("/health", apiOptions),
       (data) => setHealth(data),
     );
   }
@@ -146,7 +225,7 @@ export function App() {
     return runStep<GraphSnapshot>(
       "index",
       request,
-      () => postJson<GraphSnapshot>("/v1/repos/index", request),
+      () => postJson<GraphSnapshot>("/v1/repos/index", request, apiOptions),
       (data) => {
         setSnapshot(data);
         setAlertEvent((current) => ({
@@ -179,7 +258,7 @@ export function App() {
     return runStep<IncidentQuery>(
       "submit",
       request,
-      () => postJson<IncidentQuery>("/v1/alerts/submit", request),
+      () => postJson<IncidentQuery>("/v1/alerts/submit", request, apiOptions),
       (data) => {
         setIncidentQuery(data);
         setAlertEvent((current) => ({
@@ -200,7 +279,7 @@ export function App() {
     return runStep<EvidenceBundle>(
       "evidence",
       input,
-      () => postJson<EvidenceBundle>("/v1/evidence-bundles/build", input),
+      () => postJson<EvidenceBundle>("/v1/evidence-bundles/build", input, apiOptions),
       (data) => setBundle(data),
     );
   }
@@ -212,7 +291,7 @@ export function App() {
     return runStep<RCAReport>(
       "generate",
       input,
-      () => postJson<RCAReport>("/v1/rca/generate", input),
+      () => postJson<RCAReport>("/v1/rca/generate", input, apiOptions),
       (data) => setRcaReport(data),
     );
   }
@@ -224,7 +303,7 @@ export function App() {
     return runStep<ReviewedRCAReport>(
       "review",
       input,
-      () => postJson<ReviewedRCAReport>("/v1/rca/review", input),
+      () => postJson<ReviewedRCAReport>("/v1/rca/review", input, apiOptions),
       (data) => setReviewedReport(data),
     );
   }
@@ -245,7 +324,7 @@ export function App() {
     return runStep<IncidentRecord>(
       "save",
       request,
-      () => postJson<IncidentRecord>("/v1/incidents/save", request),
+      () => postJson<IncidentRecord>("/v1/incidents/save", request, apiOptions),
       (data) => setIncidentRecord(data),
     ).then(async (record) => {
       if (record) {
@@ -259,7 +338,7 @@ export function App() {
     return runStep<IncidentRecord>(
       "readback",
       { incident_id: incidentId },
-      () => getJson<IncidentRecord>(`/v1/incidents/${encodeURIComponent(incidentId)}`),
+      () => getJson<IncidentRecord>(`/v1/incidents/${encodeURIComponent(incidentId)}`, apiOptions),
       (data) => setPersistedIncidentRecord(data),
     );
   }
@@ -428,6 +507,14 @@ export function App() {
           <h1>Incident Workbench</h1>
         </div>
         <div className="topbar-actions">
+          <button
+            className="icon-button secondary"
+            data-testid="settings-button"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings aria-hidden="true" />
+            Settings
+          </button>
           <button className="icon-button secondary" onClick={() => void runHealth()}>
             <Server aria-hidden="true" />
             Health
@@ -550,6 +637,13 @@ export function App() {
         logs={stepLogs}
         onClose={() => setDebugOpen(false)}
       />
+      <SettingsModal
+        open={settingsOpen}
+        value={settings}
+        onChange={setSettings}
+        onClear={() => setSettings(emptyWorkbenchSettings())}
+        onClose={() => setSettingsOpen(false)}
+      />
     </main>
   );
 }
@@ -652,7 +746,7 @@ function RepoIndexForm({
         Repo URI
         <input
           data-testid="repo-uri-input"
-          placeholder="file:///absolute/path/to/repo or https://github.com/owner/repo"
+          placeholder="file:///path/to/repo or https://github.com/owner/repo or https://gitlab.com/group/repo"
           value={value.repo_uri}
           onChange={(event) => onChange("repo_uri", event.target.value)}
         />
@@ -1022,6 +1116,150 @@ function IncidentReadbackView({ record }: { record: IncidentRecord | null }) {
       </p>
     </div>
   );
+}
+
+function SettingsModal({
+  open,
+  value,
+  onChange,
+  onClear,
+  onClose,
+}: {
+  open: boolean;
+  value: WorkbenchSettings;
+  onChange: (settings: WorkbenchSettings) => void;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  if (!open) {
+    return null;
+  }
+  const update = (field: keyof WorkbenchSettings, nextValue: string) => {
+    onChange({ ...value, [field]: nextValue });
+  };
+  return (
+    <div className="settings-backdrop" onClick={onClose}>
+      <section
+        aria-labelledby="settings-title"
+        aria-modal="true"
+        className="settings-modal"
+        data-testid="settings-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="settings-header">
+          <div>
+            <p className="eyebrow">Settings</p>
+            <h2 id="settings-title">Connections</h2>
+          </div>
+          <button className="icon-button secondary" onClick={onClose}>
+            <XCircle aria-hidden="true" />
+            Close
+          </button>
+        </div>
+        <div className="settings-grid">
+          <section className="settings-section" aria-labelledby="qwen-settings-heading">
+            <div className="block-title">
+              <KeyRound aria-hidden="true" />
+              <h3 id="qwen-settings-heading">Qwen</h3>
+            </div>
+            <label>
+              API key
+              <input
+                autoComplete="off"
+                data-testid="qwen-api-key-input"
+                onChange={(event) => update("qwenApiKey", event.target.value)}
+                placeholder="sk-..."
+                type="password"
+                value={value.qwenApiKey}
+              />
+            </label>
+            <ConnectionState connected={Boolean(value.qwenApiKey.trim())} />
+          </section>
+
+          <section className="settings-section" aria-labelledby="github-settings-heading">
+            <div className="block-title">
+              <Github aria-hidden="true" />
+              <h3 id="github-settings-heading">GitHub account</h3>
+            </div>
+            <label>
+              Token
+              <input
+                autoComplete="off"
+                data-testid="github-token-input"
+                onChange={(event) => update("githubToken", event.target.value)}
+                placeholder="github_pat_..."
+                type="password"
+                value={value.githubToken}
+              />
+            </label>
+            <div className="settings-row">
+              <ConnectionState connected={Boolean(value.githubToken.trim())} />
+              <button
+                className="icon-button secondary"
+                onClick={() => openExternal("https://github.com/settings/tokens")}
+              >
+                <Github aria-hidden="true" />
+                Login
+              </button>
+            </div>
+          </section>
+
+          <section className="settings-section" aria-labelledby="gitlab-settings-heading">
+            <div className="block-title">
+              <Gitlab aria-hidden="true" />
+              <h3 id="gitlab-settings-heading">GitLab account</h3>
+            </div>
+            <label>
+              Token
+              <input
+                autoComplete="off"
+                data-testid="gitlab-token-input"
+                onChange={(event) => update("gitlabToken", event.target.value)}
+                placeholder="glpat-..."
+                type="password"
+                value={value.gitlabToken}
+              />
+            </label>
+            <div className="settings-row">
+              <ConnectionState connected={Boolean(value.gitlabToken.trim())} />
+              <button
+                className="icon-button secondary"
+                onClick={() =>
+                  openExternal("https://gitlab.com/-/user_settings/personal_access_tokens")
+                }
+              >
+                <Gitlab aria-hidden="true" />
+                Login
+              </button>
+            </div>
+          </section>
+        </div>
+        <div className="settings-actions">
+          <button className="icon-button secondary" onClick={onClear}>
+            <RotateCcw aria-hidden="true" />
+            Clear
+          </button>
+          <button className="icon-button primary" onClick={onClose}>
+            <Save aria-hidden="true" />
+            Save
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ConnectionState({ connected }: { connected: boolean }) {
+  return (
+    <span className={`connection-state ${connected ? "connected" : ""}`}>
+      {connected ? "Saved locally" : "Not connected"}
+    </span>
+  );
+}
+
+function openExternal(url: string) {
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function ContractDebugDrawer({

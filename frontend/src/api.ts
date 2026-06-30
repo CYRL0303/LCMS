@@ -23,12 +23,29 @@ export interface ApiCallResult<T> {
   elapsedMs: number;
 }
 
-export async function getJson<T>(path: string): Promise<ApiCallResult<T>> {
-  return requestJson<T>("GET", path);
+export interface RuntimeCredentials {
+  qwenApiKey?: string;
+  githubToken?: string;
+  gitlabToken?: string;
 }
 
-export async function postJson<T>(path: string, body: unknown): Promise<ApiCallResult<T>> {
-  return requestJson<T>("POST", path, body);
+export interface ApiCallOptions {
+  credentials?: RuntimeCredentials;
+}
+
+export async function getJson<T>(
+  path: string,
+  options: ApiCallOptions = {},
+): Promise<ApiCallResult<T>> {
+  return requestJson<T>("GET", path, undefined, options);
+}
+
+export async function postJson<T>(
+  path: string,
+  body: unknown,
+  options: ApiCallOptions = {},
+): Promise<ApiCallResult<T>> {
+  return requestJson<T>("POST", path, body, options);
 }
 
 function endpoint(path: string): string {
@@ -40,11 +57,12 @@ async function requestJson<T>(
   method: "GET" | "POST",
   path: string,
   body?: unknown,
+  options: ApiCallOptions = {},
 ): Promise<ApiCallResult<T>> {
   const started = performance.now();
   const response = await fetch(endpoint(path), {
     method,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    headers: requestHeaders(body, options.credentials),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await parseResponse(response);
@@ -57,6 +75,31 @@ async function requestJson<T>(
     httpStatus: response.status,
     elapsedMs,
   };
+}
+
+function requestHeaders(
+  body: unknown,
+  credentials: RuntimeCredentials | undefined,
+): Headers | undefined {
+  const headers = new Headers();
+  let hasHeaders = false;
+  if (body !== undefined) {
+    headers.set("Content-Type", "application/json");
+    hasHeaders = true;
+  }
+  if (credentials?.qwenApiKey) {
+    headers.set("X-LegacyPilot-Qwen-Api-Key", credentials.qwenApiKey);
+    hasHeaders = true;
+  }
+  if (credentials?.githubToken) {
+    headers.set("X-LegacyPilot-GitHub-Token", credentials.githubToken);
+    hasHeaders = true;
+  }
+  if (credentials?.gitlabToken) {
+    headers.set("X-LegacyPilot-GitLab-Token", credentials.gitlabToken);
+    hasHeaders = true;
+  }
+  return hasHeaders ? headers : undefined;
 }
 
 async function parseResponse(response: Response): Promise<unknown> {

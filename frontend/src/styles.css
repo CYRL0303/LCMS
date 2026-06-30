@@ -585,6 +585,88 @@ blockquote {
   border-radius: 8px;
 }
 
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(32, 33, 36, 0.36);
+  backdrop-filter: blur(8px);
+}
+
+.settings-modal {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  border: 1px solid #dde2ea;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 24px 64px rgba(16, 24, 40, 0.24);
+  padding: 14px;
+}
+
+.settings-header,
+.settings-actions,
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-header {
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eaecf0;
+}
+
+.settings-header h2 {
+  margin: 0;
+  color: #252b37;
+  font-size: 1.2rem;
+  letter-spacing: 0;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 14px;
+  padding: 14px 0;
+}
+
+.settings-section {
+  border-top: 1px solid #eaecf0;
+  padding-top: 14px;
+}
+
+.settings-section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.settings-actions {
+  padding-top: 12px;
+  border-top: 1px solid #eaecf0;
+}
+
+.connection-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 999px;
+  background: #f6f7f9;
+  color: #667085;
+  padding: 0 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.connection-state.connected {
+  background: #e4f6ed;
+  color: #12633f;
+}
+
 .debug-drawer {
   position: fixed;
   inset: 18px 18px 18px auto;
@@ -703,5 +785,25 @@ blockquote {
   .debug-drawer {
     inset: 10px;
     width: auto;
+  }
+
+  .settings-backdrop {
+    padding: 10px;
+  }
+
+  .settings-modal {
+    max-height: calc(100vh - 20px);
+  }
+
+  .settings-header,
+  .settings-actions,
+  .settings-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-actions .icon-button,
+  .settings-row .icon-button {
+    width: 100%;
   }
 }

@@ -16,6 +16,7 @@ from legacy_pilot.contracts.models import (
     RCAReport,
     ReviewedRCAReport,
 )
+from legacy_pilot.contracts.runtime_credentials import current_runtime_credentials
 from legacy_pilot.rca_reasoning_engine.errors import RCAGenerationError
 from legacy_pilot.rca_reasoning_engine.evidence import (
     assert_bundle_has_evidence,
@@ -64,7 +65,11 @@ class QwenApiRCAReasoningEngineAdapter(RCAReasoningEngineAdapter):
 
     def generate_rca(self, bundle: EvidenceBundle) -> RCAReport:
         evidence = assert_bundle_has_evidence(bundle)
-        api_key = self.api_key or os.getenv(DASHSCOPE_API_KEY_ENV)
+        api_key = (
+            self.api_key
+            or current_runtime_credentials().qwen_api_key
+            or os.getenv(DASHSCOPE_API_KEY_ENV)
+        )
         if not api_key:
             raise RCAGenerationError(
                 "DASHSCOPE_API_KEY is required for qwen_api RCA backend.",

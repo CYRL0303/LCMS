@@ -8,11 +8,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from legacy_pilot.contracts.runtime_credentials import current_runtime_credentials
+
 
 REPO_IMPORT_ROOT_ENV = "LEGACY_PILOT_REPO_IMPORT_ROOT"
 REPO_IMPORT_TIMEOUT_ENV = "LEGACY_PILOT_REPO_IMPORT_TIMEOUT_SECONDS"
 DEFAULT_REPO_IMPORT_TIMEOUT_SECONDS = 120.0
 _SAFE_SLUG_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_AUTHORITY_RE = re.compile(r"://[^/@]+:[^/@]+@")
 
 
 class RepoImportError(Exception):
@@ -28,64 +31,106 @@ class ResolvedRepo:
     metadata: dict[str, object] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class RemoteRepo:
+    source: str
+    repo_url: str
+    clone_url: str
+
+
 def resolve_repo_uri(
     repo_uri: str,
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> ResolvedRepo:
-    github = _github_repo_url(repo_uri)
-    if github is not None:
-        return _import_github_repo(github, runner=runner or subprocess.run)
+    remote = _remote_repo(repo_uri)
+    if remote is not None:
+        return _import_remote_repo(remote, runner=runner or subprocess.run)
     return ResolvedRepo(local_path=_local_repo_path(repo_uri))
 
 
-def _github_repo_url(repo_uri: str) -> str | None:
+def _remote_repo(repo_uri: str) -> RemoteRepo | None:
     parsed = urlparse(repo_uri)
     if parsed.scheme.lower() != "https":
         return None
     host = (parsed.hostname or "").lower()
-    if host != "github.com":
+    if host not in {"github.com", "gitlab.com"}:
         raise RepoImportError(
-            "Only https://github.com/<owner>/<repo> remote repo_uri values are supported.",
+            "Only https://github.com/<owner>/<repo> or "
+            "https://gitlab.com/<group>/<repo> remote repo_uri values are supported.",
             diagnostics={"repo_uri": repo_uri},
         )
     if parsed.params or parsed.query or parsed.fragment:
         raise RepoImportError(
-            "GitHub repo_uri must not include params, query, or fragment.",
+            "Remote repo_uri must not include params, query, or fragment.",
             diagnostics={"repo_uri": repo_uri},
         )
     parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if host == "github.com":
+        return _github_remote(parts, repo_uri)
+    return _gitlab_remote(parts, repo_uri)
+
+
+def _github_remote(parts: list[str], repo_uri: str) -> RemoteRepo:
     if len(parts) != 2:
         raise RepoImportError(
             "GitHub repo_uri must use https://github.com/<owner>/<repo>.",
             diagnostics={"repo_uri": repo_uri},
         )
     owner, repo = parts
-    if repo.endswith(".git"):
-        repo = repo[:-4]
+    repo = repo.removesuffix(".git")
     if not owner or not repo:
         raise RepoImportError(
             "GitHub repo_uri must include both owner and repo.",
             diagnostics={"repo_uri": repo_uri},
         )
-    return f"https://github.com/{owner}/{repo}.git"
+    repo_url = f"https://github.com/{owner}/{repo}.git"
+    token = current_runtime_credentials().github_token
+    return RemoteRepo(
+        source="github",
+        repo_url=repo_url,
+        clone_url=_authenticated_url(repo_url, username="x-access-token", token=token),
+    )
 
 
-def _import_github_repo(
-    repo_url: str,
+def _gitlab_remote(parts: list[str], repo_uri: str) -> RemoteRepo:
+    if len(parts) < 2:
+        raise RepoImportError(
+            "GitLab repo_uri must use https://gitlab.com/<group>/<repo>.",
+            diagnostics={"repo_uri": repo_uri},
+        )
+    repo = parts[-1].removesuffix(".git")
+    group_parts = parts[:-1]
+    if not repo or any(not part for part in group_parts):
+        raise RepoImportError(
+            "GitLab repo_uri must include both group path and repo.",
+            diagnostics={"repo_uri": repo_uri},
+        )
+    repo_path = "/".join([*group_parts, repo])
+    repo_url = f"https://gitlab.com/{repo_path}.git"
+    token = current_runtime_credentials().gitlab_token
+    return RemoteRepo(
+        source="gitlab",
+        repo_url=repo_url,
+        clone_url=_authenticated_url(repo_url, username="oauth2", token=token),
+    )
+
+
+def _import_remote_repo(
+    remote: RemoteRepo,
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]],
 ) -> ResolvedRepo:
-    destination = _github_destination(repo_url)
+    destination = _remote_destination(remote.repo_url)
     if destination.exists():
         if not (destination / ".git").exists():
             raise RepoImportError(
-                "GitHub import destination exists but is not a git repository.",
-                diagnostics={"repo_uri": repo_url, "repo_path": str(destination)},
+                "Remote import destination exists but is not a git repository.",
+                diagnostics={"repo_uri": remote.repo_url, "repo_path": str(destination)},
             )
         return ResolvedRepo(
             local_path=str(destination),
-            metadata=_github_metadata(repo_url, destination, imported=False),
+            metadata=_remote_metadata(remote, destination, imported=False),
         )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +140,7 @@ def _import_github_repo(
         "--depth",
         "1",
         "--",
-        repo_url,
+        remote.clone_url,
         str(destination),
     ]
     try:
@@ -107,46 +152,61 @@ def _import_github_repo(
         )
     except subprocess.TimeoutExpired as exc:
         raise RepoImportError(
-            "GitHub repo import timed out.",
-            diagnostics={"repo_uri": repo_url, "timeout_seconds": str(exc.timeout)},
+            "Remote repo import timed out.",
+            diagnostics={"repo_uri": remote.repo_url, "timeout_seconds": str(exc.timeout)},
         ) from exc
     except OSError as exc:
         raise RepoImportError(
-            "GitHub repo import failed before git clone completed.",
-            diagnostics={"repo_uri": repo_url, "error_type": exc.__class__.__name__},
+            "Remote repo import failed before git clone completed.",
+            diagnostics={"repo_uri": remote.repo_url, "error_type": exc.__class__.__name__},
         ) from exc
     if completed.returncode != 0:
         raise RepoImportError(
-            "GitHub repo import failed.",
+            "Remote repo import failed.",
             diagnostics={
-                "repo_uri": repo_url,
+                "repo_uri": remote.repo_url,
                 "returncode": str(completed.returncode),
-                "stderr": (completed.stderr or "")[:2000],
+                "stderr": _redact_remote_secret(completed.stderr or "", remote)[:2000],
             },
         )
     return ResolvedRepo(
         local_path=str(destination),
-        metadata=_github_metadata(repo_url, destination, imported=True),
+        metadata=_remote_metadata(remote, destination, imported=True),
     )
 
 
-def _github_destination(repo_url: str) -> Path:
+def _remote_destination(repo_url: str) -> Path:
     parsed = urlparse(repo_url)
-    owner, repo = parsed.path.strip("/").removesuffix(".git").split("/", 1)
-    slug = _safe_slug(f"{owner}-{repo}")
+    repo_path = parsed.path.strip("/").removesuffix(".git")
+    slug = _safe_slug(f"{parsed.hostname or 'remote'}-{repo_path}")
     digest = hashlib.sha256(repo_url.encode("utf-8")).hexdigest()[:12]
     return _import_root() / f"{slug}-{digest}"
 
 
-def _github_metadata(repo_url: str, destination: Path, *, imported: bool) -> dict[str, object]:
+def _remote_metadata(
+    remote: RemoteRepo, destination: Path, *, imported: bool
+) -> dict[str, object]:
     return {
         "repo_import": {
-            "source": "github",
-            "repo_url": repo_url,
+            "source": remote.source,
+            "repo_url": remote.repo_url,
             "local_path": str(destination),
             "imported": imported,
         }
     }
+
+
+def _authenticated_url(repo_url: str, *, username: str, token: str | None) -> str:
+    if not token:
+        return repo_url
+    parsed = urlparse(repo_url)
+    authority = f"{username}:{token}@{parsed.netloc}"
+    return parsed._replace(netloc=authority).geturl()
+
+
+def _redact_remote_secret(value: str, remote: RemoteRepo) -> str:
+    redacted = value.replace(remote.clone_url, remote.repo_url)
+    return _AUTHORITY_RE.sub("://<redacted>@", redacted)
 
 
 def _import_root() -> Path:

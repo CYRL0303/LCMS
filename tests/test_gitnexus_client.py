@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from legacy_pilot.contracts.runtime_credentials import RuntimeCredentials, use_runtime_credentials
 from legacy_pilot.code_knowledge_core.errors import CodeKnowledgeCoreError
 from legacy_pilot.code_knowledge_core.gitnexus_client import GitNexusCliClient
 from legacy_pilot.contracts.models import GraphQuery, RepoIndexRequest
@@ -404,7 +405,8 @@ def test_index_repo_rejects_unsupported_remote_repo_uri_before_analyze():
 
     error = excinfo.value
     assert error.message == (
-        "Only https://github.com/<owner>/<repo> remote repo_uri values are supported."
+        "Only https://github.com/<owner>/<repo> or "
+        "https://gitlab.com/<group>/<repo> remote repo_uri values are supported."
     )
     assert error.recoverable is True
     assert error.diagnostics["repo_uri"] == "https://example.com/repo.git"
@@ -446,6 +448,79 @@ def test_index_repo_imports_github_repo_uri_before_gitnexus_analyze(tmp_path, mo
     assert analyze_command[2] == payload["repo_path"]
     assert payload["metadata"]["repo_import"]["source"] == "github"
     assert payload["metadata"]["repo_import"]["imported"] is True
+
+
+def test_index_repo_imports_github_repo_with_request_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_REPO_IMPORT_ROOT", str(tmp_path))
+    runner = CreatingGitCloneRunner(
+        results=[
+            completed_process({}),
+            cypher_process("| n.id |\n| --- |\n"),
+        ]
+    )
+    client = GitNexusCliClient(runner=runner)
+
+    with use_runtime_credentials(RuntimeCredentials(github_token="gh-test-token")):
+        payload = client.index_repo(
+            repo_index_request(repo_uri="https://github.com/acme/private-repo")
+        )
+
+    clone_command = runner.calls[0][0][0]
+    assert clone_command[-2] == "https://x-access-token:gh-test-token@github.com/acme/private-repo.git"
+    assert payload["metadata"]["repo_import"]["repo_url"] == (
+        "https://github.com/acme/private-repo.git"
+    )
+    assert "gh-test-token" not in str(payload["metadata"])
+
+
+def test_index_repo_imports_gitlab_repo_with_request_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_REPO_IMPORT_ROOT", str(tmp_path))
+    runner = CreatingGitCloneRunner(
+        results=[
+            completed_process({}),
+            cypher_process("| n.id |\n| --- |\n"),
+        ]
+    )
+    client = GitNexusCliClient(runner=runner)
+
+    with use_runtime_credentials(RuntimeCredentials(gitlab_token="gl-test-token")):
+        payload = client.index_repo(
+            repo_index_request(repo_uri="https://gitlab.com/group/sub/private-repo")
+        )
+
+    clone_command = runner.calls[0][0][0]
+    assert clone_command[-2] == (
+        "https://oauth2:gl-test-token@gitlab.com/group/sub/private-repo.git"
+    )
+    assert payload["metadata"]["repo_import"]["source"] == "gitlab"
+    assert payload["metadata"]["repo_import"]["repo_url"] == (
+        "https://gitlab.com/group/sub/private-repo.git"
+    )
+    assert "gl-test-token" not in str(payload["metadata"])
+
+
+def test_remote_repo_import_failure_redacts_request_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_REPO_IMPORT_ROOT", str(tmp_path))
+    runner = RecordingRunner(
+        subprocess.CompletedProcess(
+            args=["git", "clone"],
+            returncode=128,
+            stdout="",
+            stderr=(
+                "fatal: https://x-access-token:gh-secret@github.com/acme/private.git "
+                "authentication failed"
+            ),
+        )
+    )
+    client = GitNexusCliClient(runner=runner)
+
+    with use_runtime_credentials(RuntimeCredentials(github_token="gh-secret")):
+        with pytest.raises(CodeKnowledgeCoreError) as excinfo:
+            client.index_repo(repo_index_request(repo_uri="https://github.com/acme/private"))
+
+    assert excinfo.value.message == "Remote repo import failed."
+    assert "gh-secret" not in excinfo.value.diagnostics["stderr"]
+    assert "x-access-token" not in excinfo.value.diagnostics["stderr"]
 
 
 def test_index_repo_rejects_missing_repo_path_before_analyze(tmp_path):
