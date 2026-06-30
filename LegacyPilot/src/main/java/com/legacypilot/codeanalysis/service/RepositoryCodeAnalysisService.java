@@ -21,15 +21,18 @@ import static org.springframework.http.HttpStatus.BAD_REQUEST;
 public class RepositoryCodeAnalysisService {
     private final RepositoryService repositoryService;
     private final JavaCodeAnalysisService javaCodeAnalysisService;
+    private final CodeAnalysisResultStore codeAnalysisResultStore;
     // private final CodeKnowledgeClient codeKnowledgeClient;
 
     public RepositoryCodeAnalysisService(
             RepositoryService repositoryService,
-            JavaCodeAnalysisService javaCodeAnalysisService
+            JavaCodeAnalysisService javaCodeAnalysisService,
+            CodeAnalysisResultStore codeAnalysisResultStore
             // CodeKnowledgeClient codeKnowledgeClient
     ) {
         this.repositoryService = repositoryService;
         this.javaCodeAnalysisService = javaCodeAnalysisService;
+        this.codeAnalysisResultStore = codeAnalysisResultStore;
         // this.codeKnowledgeClient = codeKnowledgeClient;
     }
 
@@ -44,6 +47,7 @@ public class RepositoryCodeAnalysisService {
 
         CodeAnalysisResult analysisResult =
                 javaCodeAnalysisService.analyze(repository.repoId(), repository.localRepoPath());
+        codeAnalysisResultStore.save(repository.repoId(), analysisResult);
 
         return new RepositoryGraphAnalysisResponse(
                 repository.repoId(),
@@ -65,5 +69,10 @@ public class RepositoryCodeAnalysisService {
                 graphSnapshot.generatedAt()
         );
         */
+    }
+
+    public CodeAnalysisResult getAnalysisResult(String repoId) {
+        repositoryService.getRepository(repoId);
+        return codeAnalysisResultStore.get(repoId);
     }
 }
