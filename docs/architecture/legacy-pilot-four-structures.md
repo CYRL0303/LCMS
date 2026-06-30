@@ -439,3 +439,45 @@ P2. 补充多语言 adapter 和更多 demo case
 - LLM 生成的语义边默认是待验证信息，必须有 confidence 和 evidence_span。
 - MVP 只承诺 Java / Spring Boot 闭环，多语言作为 adapter 能力预留。
 - 迁移能力只输出风险、影响范围和 checklist，不自动迁移生产代码。
+
+## 2026-06-30 Implementation Update
+
+This section records the current implemented architecture and supersedes older
+MVP/mock notes elsewhere in this file where they conflict.
+
+- Structure 1 production backend is `gitnexus_cli`. `RepoIndexRequest.repo_uri`
+  accepts local paths, `file://` URIs, GitHub HTTPS URLs, and GitLab HTTPS URLs.
+  Remote repositories are imported with `git clone --depth 1` into the
+  `LEGACY_PILOT_REPO_IMPORT_ROOT` cache before GitNexus analyzes the local
+  checkout. GitHub/GitLab private imports use runtime request headers, not
+  committed secrets.
+- `repo_id` is the user/project-level repository alias. `graph_id` is a
+  concrete graph snapshot ID produced by a real index run or selected from
+  persisted graphs. One `repo_id` can have multiple `graph_id` snapshots.
+- Structure 1 owns PostgreSQL graph payload persistence. Other structures must
+  consume graph data only through `QueryGraph`; they must not connect directly
+  to the graph store.
+- Middleware exposes `GET /v1/graphs` and
+  `DELETE /v1/graphs/{repo_id}/{graph_id}`. Deleting a graph is blocked when
+  Structure 4 has incident memory rows referencing that graph.
+- Structure 2 passes `EvidenceBundle.incident_query.graph_id` forward. Structure
+  3 copies it into `RCAReport` and `ReviewedRCAReport`. Structure 4 persists it
+  in `IncidentRecord` and the PostgreSQL incident memory table.
+- Structure 4 production factory only allows PostgreSQL. There is no production
+  in-memory fallback and missing DSN fails loudly.
+- The current real product path is:
+
+```text
+IndexRepo or UseExistingGraph
+-> SubmitAlert
+-> BuildEvidenceBundle
+-> GenerateRCA
+-> ReviewRCA
+-> SaveIncident
+-> ReadIncident
+```
+
+Current limitation: broad natural-language incidents can still fail at
+`GenerateRCA` when the Qwen response does not include valid evidence IDs. The
+normalization/repair path is not yet fully productized for arbitrary incident
+text.

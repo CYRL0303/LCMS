@@ -2,6 +2,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from legacy_pilot.code_knowledge_core.adapter import CodeKnowledgeCoreAdapter
+from legacy_pilot.code_knowledge_core.graph_store import GraphStoreRecord
 from legacy_pilot.contracts.models import (
     Edge,
     EvidenceRef,
@@ -161,6 +162,12 @@ class TestCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
             confidence=0.88,
         )
 
+    def list_graphs(self) -> list[GraphStoreRecord]:
+        return []
+
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
+        return False
+
     def _evidence_ref(
         self,
         *,
@@ -214,4 +221,11 @@ class TestInMemoryIncidentMemoryStoreAdapter(IncidentMemoryStoreAdapter):
             query=query,
             records=list(self._records.values()),
             limit=limit,
+        )
+
+    def count_incidents_for_graph(self, *, repo_id: str, graph_id: str) -> int:
+        return sum(
+            1
+            for record in self._records.values()
+            if record.repo_id == repo_id and record.graph_id == graph_id
         )

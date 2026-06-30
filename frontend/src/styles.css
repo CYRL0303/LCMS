@@ -120,9 +120,24 @@ button {
   color: #3b4656;
 }
 
+.icon-button.danger {
+  background: #b42318;
+  color: #fff;
+}
+
+.icon-button.icon-only {
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+}
+
 .icon-button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
 }
 
 .statusbar,
@@ -384,6 +399,143 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(44, 124, 144, 0.14);
 }
 
+.graph-picker {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+}
+
+.graph-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #344054;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.graph-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 38px;
+  gap: 8px;
+  border: 1px solid #cfd6df;
+  border-radius: 6px;
+  background: #fff;
+  color: #252b37;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.graph-picker-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-picker-trigger svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.graph-options {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  z-index: 8;
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid #cfd6df;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 16px 32px rgba(16, 24, 40, 0.16);
+}
+
+.graph-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: stretch;
+  border-top: 1px solid #eaecf0;
+}
+
+.graph-option:first-child {
+  border-top: 0;
+}
+
+.graph-option.selected {
+  background: #eef7f5;
+}
+
+.graph-option-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  background: transparent;
+  color: #252b37;
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.graph-option-main strong,
+.graph-option-main small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-option-main strong {
+  font-size: 0.82rem;
+}
+
+.graph-option-main small {
+  color: #667085;
+  font-size: 0.74rem;
+}
+
+.graph-delete-button {
+  display: grid;
+  place-items: center;
+  border-left: 1px solid #eaecf0;
+  background: transparent;
+  color: #667085;
+  cursor: pointer;
+}
+
+.graph-delete-button:hover {
+  background: #fee9e7;
+  color: #b42318;
+}
+
+.graph-delete-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.graph-empty {
+  padding: 10px;
+  color: #667085;
+  font-size: 0.82rem;
+}
+
+.inline-error {
+  margin: 0;
+  color: #b42318;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .two-col {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -626,6 +778,16 @@ blockquote {
   background: #fff;
   box-shadow: 0 24px 64px rgba(16, 24, 40, 0.24);
   padding: 14px;
+}
+
+.graph-delete-modal {
+  width: min(560px, 100%);
+}
+
+.graph-delete-body {
+  display: grid;
+  gap: 8px;
+  padding: 14px 0;
 }
 
 .settings-header,

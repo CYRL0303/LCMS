@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Archive,
   BrainCircuit,
+  ChevronDown,
   CheckCircle2,
   ClipboardList,
   Database,
@@ -12,11 +13,14 @@ import {
   KeyRound,
   Loader2,
   Play,
+  RefreshCw,
   RotateCcw,
   Save,
   Server,
   Settings,
   ShieldCheck,
+  Trash2,
+  X,
   XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -24,6 +28,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ApiRequestError,
   apiBase,
+  deleteJson,
   getJson,
   isContractError,
   postJson,
@@ -37,6 +42,7 @@ import {
 import type {
   AlertEvent,
   ContractError,
+  DeleteGraphResponse,
   EvidenceBackedItem,
   EvidenceBundle,
   EvidenceRef,
@@ -52,6 +58,7 @@ import type {
   StepKey,
   StepLog,
   StepStatus,
+  StoredGraph,
 } from "./contracts";
 
 const stepMeta: Record<StepKey, { label: string; endpoint: string; icon: LucideIcon }> = {
@@ -87,6 +94,8 @@ type WorkbenchSettings = {
   githubToken: string;
   gitlabToken: string;
 };
+
+type GraphListStatus = "idle" | "loading" | "failed";
 
 const SETTINGS_STORAGE_KEY = "legacyPilot.workbench.settings.v1";
 
@@ -172,6 +181,11 @@ export function App() {
   const [debugOpen, setDebugOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<WorkbenchSettings>(loadWorkbenchSettings);
+  const [storedGraphs, setStoredGraphs] = useState<StoredGraph[]>([]);
+  const [graphListStatus, setGraphListStatus] = useState<GraphListStatus>("idle");
+  const [graphListError, setGraphListError] = useState<string | null>(null);
+  const [graphDeleteTarget, setGraphDeleteTarget] = useState<StoredGraph | null>(null);
+  const [graphDeleteRunning, setGraphDeleteRunning] = useState(false);
 
   useEffect(() => {
     void runHealth();
@@ -200,7 +214,17 @@ export function App() {
 
   const canUseApi = stepLogs.health.status === "passed";
   const canIndex = canUseApi && Boolean(repoRequest.repo_id.trim() && repoRequest.repo_uri.trim());
-  const canSubmit = canUseApi && Boolean(alertEvent.alert_id.trim() && alertEvent.repo_id.trim());
+  const canUseExistingGraph =
+    canUseApi && Boolean(alertEvent.repo_id.trim() && alertEvent.graph_id?.trim());
+  const canSubmit =
+    canUseApi &&
+    Boolean(
+      alertEvent.alert_id.trim() &&
+        alertEvent.repo_id.trim() &&
+        alertEvent.raw_log.trim(),
+    );
+  const canRunFullPipeline =
+    canSubmit && Boolean(repoRequest.repo_uri.trim() || alertEvent.graph_id?.trim());
   const canBuildEvidence = canUseApi && incidentQuery !== null;
   const canGenerateRca = canUseApi && bundle !== null;
   const canReviewRca = canUseApi && rcaReport !== null;
@@ -210,14 +234,44 @@ export function App() {
     saveDraft.user_confirmation &&
     saveDraft.fix_outcome.trim().length > 0 &&
     saveDraft.retention_policy.trim().length > 0;
+  const isPipelineRunning = stepOrder.some(
+    (key) => key !== "health" && stepLogs[key].status === "running",
+  );
+  const isUsingExistingGraphRunning =
+    isPipelineRunning && Boolean(alertEvent.graph_id?.trim()) && !repoRequest.repo_uri.trim();
+  const isHealthRunning = stepLogs.health.status === "running";
+  const isIndexing = stepLogs.index.status === "running";
+  const isSubmittingAlert = stepLogs.submit.status === "running";
+  const isBuildingEvidence = stepLogs.evidence.status === "running";
+  const isGeneratingRca = stepLogs.generate.status === "running";
+  const isReviewingRca = stepLogs.review.status === "running";
+  const isSavingIncident =
+    stepLogs.save.status === "running" || stepLogs.readback.status === "running";
 
   async function runHealth(): Promise<HealthResponse | null> {
     return runStep<HealthResponse>(
       "health",
       undefined,
       () => getJson<HealthResponse>("/health", apiOptions),
-      (data) => setHealth(data),
+      (data) => {
+        setHealth(data);
+        void loadStoredGraphs();
+      },
     );
+  }
+
+  async function loadStoredGraphs() {
+    setGraphListStatus("loading");
+    setGraphListError(null);
+    try {
+      const result = await getJson<StoredGraph[]>("/v1/graphs", apiOptions);
+      setStoredGraphs(result.data);
+      setGraphListStatus("idle");
+    } catch (error) {
+      const unpacked = unpackError(error);
+      setGraphListError(unpacked.body.message);
+      setGraphListStatus("failed");
+    }
   }
 
   async function runIndex(): Promise<GraphSnapshot | null> {
@@ -233,6 +287,7 @@ export function App() {
           repo_id: data.repo_id,
           graph_id: data.graph_id,
         }));
+        void loadStoredGraphs();
       },
     );
   }
@@ -251,6 +306,52 @@ export function App() {
       elapsedMs: undefined,
     });
     clearPipelineAfter("index");
+  }
+
+  function selectStoredGraph(graph: StoredGraph) {
+    setRepoRequest((current) => ({
+      ...current,
+      repo_id: graph.repo_id,
+    }));
+    setAlertEvent((current) => ({
+      ...current,
+      repo_id: graph.repo_id,
+      graph_id: graph.graph_id,
+    }));
+    setSnapshot(null);
+    clearPipelineAfter("index");
+  }
+
+  async function confirmDeleteGraph() {
+    if (!graphDeleteTarget || graphDeleteTarget.incident_memory_count > 0) {
+      return;
+    }
+    const target = graphDeleteTarget;
+    setGraphDeleteRunning(true);
+    try {
+      await deleteJson<DeleteGraphResponse>(
+        `/v1/graphs/${encodeURIComponent(target.repo_id)}/${encodeURIComponent(target.graph_id)}`,
+        apiOptions,
+      );
+      setGraphDeleteTarget(null);
+      setStoredGraphs((graphs) =>
+        graphs.filter(
+          (graph) =>
+            graph.repo_id !== target.repo_id || graph.graph_id !== target.graph_id,
+        ),
+      );
+      if (alertEvent.repo_id === target.repo_id && alertEvent.graph_id === target.graph_id) {
+        setAlertEvent((current) => ({ ...current, graph_id: "" }));
+      }
+      void loadStoredGraphs();
+    } catch (error) {
+      const unpacked = unpackError(error);
+      setGraphListError(unpacked.body.message);
+      setGraphListStatus("failed");
+      setGraphDeleteTarget(null);
+    } finally {
+      setGraphDeleteRunning(false);
+    }
   }
 
   async function runSubmitAlert(override?: Partial<AlertEvent>): Promise<IncidentQuery | null> {
@@ -344,6 +445,9 @@ export function App() {
   }
 
   async function runFullPipeline() {
+    if (!canRunFullPipeline) {
+      return;
+    }
     let nextSnapshot = snapshot;
     if (!nextSnapshot && repoRequest.repo_uri.trim()) {
       nextSnapshot = await runIndex();
@@ -515,8 +619,12 @@ export function App() {
             <Settings aria-hidden="true" />
             Settings
           </button>
-          <button className="icon-button secondary" onClick={() => void runHealth()}>
-            <Server aria-hidden="true" />
+          <button
+            className="icon-button secondary"
+            disabled={isHealthRunning}
+            onClick={() => void runHealth()}
+          >
+            <ButtonIcon icon={Server} loading={isHealthRunning} />
             Health
           </button>
           <button className="icon-button secondary" onClick={resetAll}>
@@ -526,10 +634,10 @@ export function App() {
           <button
             className="icon-button primary"
             data-testid="run-full-pipeline"
-            disabled={!canUseApi || (!repoRequest.repo_uri.trim() && !alertEvent.graph_id)}
+            disabled={!canRunFullPipeline || isPipelineRunning}
             onClick={() => void runFullPipeline()}
           >
-            <Play aria-hidden="true" />
+            <ButtonIcon icon={Play} loading={isPipelineRunning} />
             Run full pipeline
           </button>
         </div>
@@ -555,19 +663,31 @@ export function App() {
           <RepoIndexForm
             value={repoRequest}
             canIndex={canIndex}
+            canUseExistingGraph={canUseExistingGraph}
+            graphListError={graphListError}
+            graphListStatus={graphListStatus}
+            isIndexing={isIndexing}
+            isUsingExistingGraphRunning={isUsingExistingGraphRunning}
+            selectedGraphId={alertEvent.graph_id || ""}
+            storedGraphs={storedGraphs}
             onChange={setRepoField}
             onIndex={() => void runIndex()}
+            onReloadGraphs={() => void loadStoredGraphs()}
+            onRequestDeleteGraph={setGraphDeleteTarget}
+            onSelectGraph={selectStoredGraph}
             onSkip={skipIndex}
           />
           <AlertForm
             value={alertEvent}
             canSubmit={canSubmit}
+            isSubmitting={isSubmittingAlert}
             onChange={setAlertField}
             onSubmit={() => void runSubmitAlert()}
           />
           <SaveForm
             value={saveDraft}
             canSave={canSave}
+            isSaving={isSavingIncident}
             onChange={setSaveDraft}
             onSave={() => void runSaveIncident()}
           />
@@ -581,10 +701,10 @@ export function App() {
             </div>
             <button
               className="icon-button secondary"
-              disabled={!canBuildEvidence}
+              disabled={!canBuildEvidence || isBuildingEvidence}
               onClick={() => void runBuildEvidence()}
             >
-              <Database aria-hidden="true" />
+              <ButtonIcon icon={Database} loading={isBuildingEvidence} />
               Build evidence
             </button>
           </div>
@@ -594,18 +714,18 @@ export function App() {
           <div className="inline-actions">
             <button
               className="icon-button secondary"
-              disabled={!canGenerateRca}
+              disabled={!canGenerateRca || isGeneratingRca}
               onClick={() => void runGenerateRca()}
             >
-              <BrainCircuit aria-hidden="true" />
+              <ButtonIcon icon={BrainCircuit} loading={isGeneratingRca} />
               Generate RCA
             </button>
             <button
               className="icon-button secondary"
-              disabled={!canReviewRca}
+              disabled={!canReviewRca || isReviewingRca}
               onClick={() => void runReviewRca()}
             >
-              <ShieldCheck aria-hidden="true" />
+              <ButtonIcon icon={ShieldCheck} loading={isReviewingRca} />
               Review RCA
             </button>
           </div>
@@ -643,6 +763,12 @@ export function App() {
         onChange={setSettings}
         onClear={() => setSettings(emptyWorkbenchSettings())}
         onClose={() => setSettingsOpen(false)}
+      />
+      <GraphDeleteModal
+        deleting={graphDeleteRunning}
+        graph={graphDeleteTarget}
+        onCancel={() => setGraphDeleteTarget(null)}
+        onConfirm={() => void confirmDeleteGraph()}
       />
     </main>
   );
@@ -696,6 +822,16 @@ function backendLabel(name: string): string {
   return labels[name] || name;
 }
 
+function graphLabel(graph: StoredGraph): string {
+  const updated = new Date(graph.updated_at).toLocaleString();
+  return `${graph.repo_id} / ${graph.graph_id} / ${updated}`;
+}
+
+function ButtonIcon({ icon: Icon, loading = false }: { icon: LucideIcon; loading?: boolean }) {
+  const ActualIcon = loading ? Loader2 : Icon;
+  return <ActualIcon aria-hidden="true" className={loading ? "spin" : undefined} />;
+}
+
 function PipelineStepper({ logs }: { logs: StepLogs }) {
   return (
     <section className="stepper" aria-label="Pipeline status">
@@ -719,14 +855,34 @@ function PipelineStepper({ logs }: { logs: StepLogs }) {
 function RepoIndexForm({
   value,
   canIndex,
+  canUseExistingGraph,
+  graphListError,
+  graphListStatus,
+  isIndexing,
+  isUsingExistingGraphRunning,
+  selectedGraphId,
+  storedGraphs,
   onChange,
   onIndex,
+  onReloadGraphs,
+  onRequestDeleteGraph,
+  onSelectGraph,
   onSkip,
 }: {
   value: RepoIndexRequest;
   canIndex: boolean;
+  canUseExistingGraph: boolean;
+  graphListError: string | null;
+  graphListStatus: GraphListStatus;
+  isIndexing: boolean;
+  isUsingExistingGraphRunning: boolean;
+  selectedGraphId: string;
+  storedGraphs: StoredGraph[];
   onChange: (field: keyof RepoIndexRequest, value: string) => void;
   onIndex: () => void;
+  onReloadGraphs: () => void;
+  onRequestDeleteGraph: (graph: StoredGraph) => void;
+  onSelectGraph: (graph: StoredGraph) => void;
   onSkip: () => void;
 }) {
   return (
@@ -774,13 +930,30 @@ function RepoIndexForm({
           onChange={(event) => onChange("contract_version", event.target.value)}
         />
       </label>
+      <ExistingGraphPicker
+        error={graphListError}
+        graphs={storedGraphs}
+        loading={graphListStatus === "loading"}
+        selectedGraphId={selectedGraphId}
+        onDelete={onRequestDeleteGraph}
+        onRefresh={onReloadGraphs}
+        onSelect={onSelectGraph}
+      />
       <div className="inline-actions">
-        <button className="icon-button secondary" disabled={!canIndex} onClick={onIndex}>
-          <Database aria-hidden="true" />
+        <button
+          className="icon-button secondary"
+          disabled={!canIndex || isIndexing}
+          onClick={onIndex}
+        >
+          <ButtonIcon icon={Database} loading={isIndexing} />
           Index repo
         </button>
-        <button className="icon-button ghost" onClick={onSkip}>
-          <Play aria-hidden="true" />
+        <button
+          className="icon-button ghost"
+          disabled={!canUseExistingGraph || isUsingExistingGraphRunning}
+          onClick={onSkip}
+        >
+          <ButtonIcon icon={Play} loading={isUsingExistingGraphRunning} />
           Use existing graph
         </button>
       </div>
@@ -788,14 +961,200 @@ function RepoIndexForm({
   );
 }
 
+function ExistingGraphPicker({
+  error,
+  graphs,
+  loading,
+  selectedGraphId,
+  onDelete,
+  onRefresh,
+  onSelect,
+}: {
+  error: string | null;
+  graphs: StoredGraph[];
+  loading: boolean;
+  selectedGraphId: string;
+  onDelete: (graph: StoredGraph) => void;
+  onRefresh: () => void;
+  onSelect: (graph: StoredGraph) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedGraph = graphs.find((graph) => graph.graph_id === selectedGraphId);
+  return (
+    <div className="graph-picker">
+      <div className="graph-picker-heading">
+        <span>Existing graphs</span>
+        <button
+          aria-label="Refresh existing graphs"
+          className="icon-button ghost icon-only"
+          disabled={loading}
+          onClick={onRefresh}
+          type="button"
+        >
+          <ButtonIcon icon={RefreshCw} loading={loading} />
+        </button>
+      </div>
+      <button
+        aria-expanded={open}
+        className="graph-picker-trigger"
+        data-testid="existing-graph-trigger"
+        onClick={() => setOpen((current) => !current)}
+        type="button"
+      >
+        <span>
+          {selectedGraph
+            ? graphLabel(selectedGraph)
+            : selectedGraphId
+              ? selectedGraphId
+              : "Select existing graph"}
+        </span>
+        <ChevronDown aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="graph-options" role="listbox">
+          {graphs.length === 0 && (
+            <div className="graph-empty">
+              {loading ? "Loading graphs..." : "No persisted graphs"}
+            </div>
+          )}
+          {graphs.map((graph) => (
+            <div
+              className={`graph-option ${graph.graph_id === selectedGraphId ? "selected" : ""}`}
+              key={`${graph.repo_id}:${graph.graph_id}`}
+              role="option"
+              aria-selected={graph.graph_id === selectedGraphId}
+            >
+              <button
+                className="graph-option-main"
+                onClick={() => {
+                  onSelect(graph);
+                  setOpen(false);
+                }}
+                type="button"
+              >
+                <strong>{graphLabel(graph)}</strong>
+                <small>
+                  {graph.node_count} nodes / {graph.edge_count} edges /{" "}
+                  {graph.incident_memory_count} incident memories
+                </small>
+              </button>
+              <button
+                aria-label={`Delete graph ${graph.graph_id}`}
+                className="graph-delete-button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDelete(graph);
+                  setOpen(false);
+                }}
+                type="button"
+              >
+                <X aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {error && <p className="inline-error">{error}</p>}
+    </div>
+  );
+}
+
+function GraphDeleteModal({
+  deleting,
+  graph,
+  onCancel,
+  onConfirm,
+}: {
+  deleting: boolean;
+  graph: StoredGraph | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!graph) {
+    return null;
+  }
+  const blocked = graph.incident_memory_count > 0;
+  return (
+    <div className="settings-backdrop" onClick={deleting ? undefined : onCancel}>
+      <section
+        aria-labelledby="graph-delete-title"
+        aria-modal="true"
+        className="settings-modal graph-delete-modal"
+        data-testid="graph-delete-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="settings-header">
+          <div>
+            <p className="eyebrow">GraphSnapshot</p>
+            <h2 id="graph-delete-title">{blocked ? "Graph in use" : "Delete graph"}</h2>
+          </div>
+          <button
+            className="icon-button secondary"
+            disabled={deleting}
+            onClick={onCancel}
+            type="button"
+          >
+            <XCircle aria-hidden="true" />
+            Close
+          </button>
+        </div>
+        <div className="graph-delete-body">
+          <Metric label="repo_id" value={graph.repo_id} />
+          <Metric label="graph_id" value={graph.graph_id} />
+          <Metric label="incident memories" value={graph.incident_memory_count.toString()} />
+          {blocked ? (
+            <div className="warning-box">
+              <AlertTriangle aria-hidden="true" />
+              <span>
+                This graph is used by {graph.incident_memory_count} incident memory
+                {graph.incident_memory_count === 1 ? "" : " records"}. Delete is blocked.
+              </span>
+            </div>
+          ) : (
+            <p className="summary-text">
+              This removes the persisted GraphSnapshot payload. Incident memory records are not
+              deleted by this action.
+            </p>
+          )}
+        </div>
+        <div className="settings-actions">
+          <button
+            className="icon-button secondary"
+            disabled={deleting}
+            onClick={onCancel}
+            type="button"
+          >
+            <XCircle aria-hidden="true" />
+            Cancel
+          </button>
+          {!blocked && (
+            <button
+              className="icon-button danger"
+              disabled={deleting}
+              onClick={onConfirm}
+              type="button"
+            >
+              <ButtonIcon icon={Trash2} loading={deleting} />
+              Delete
+            </button>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AlertForm({
   value,
   canSubmit,
+  isSubmitting,
   onChange,
   onSubmit,
 }: {
   value: AlertEvent;
   canSubmit: boolean;
+  isSubmitting: boolean;
   onChange: (field: keyof AlertEvent, value: string) => void;
   onSubmit: () => void;
 }) {
@@ -867,8 +1226,12 @@ function AlertForm({
           />
         </label>
       </div>
-      <button className="icon-button secondary" disabled={!canSubmit} onClick={onSubmit}>
-        <Activity aria-hidden="true" />
+      <button
+        className="icon-button secondary"
+        disabled={!canSubmit || isSubmitting}
+        onClick={onSubmit}
+      >
+        <ButtonIcon icon={Activity} loading={isSubmitting} />
         Submit alert
       </button>
     </div>
@@ -878,11 +1241,13 @@ function AlertForm({
 function SaveForm({
   value,
   canSave,
+  isSaving,
   onChange,
   onSave,
 }: {
   value: ReturnType<typeof defaultSaveRequest>;
   canSave: boolean;
+  isSaving: boolean;
   onChange: (value: ReturnType<typeof defaultSaveRequest>) => void;
   onSave: () => void;
 }) {
@@ -930,10 +1295,10 @@ function SaveForm({
       <button
         className="icon-button primary"
         data-testid="save-incident-button"
-        disabled={!canSave}
+        disabled={!canSave || isSaving}
         onClick={onSave}
       >
-        <Save aria-hidden="true" />
+        <ButtonIcon icon={Save} loading={isSaving} />
         Save incident
       </button>
     </div>
@@ -1038,6 +1403,7 @@ function RCAReportView({ report }: { report: RCAReport | null }) {
       <h3>RCAReport</h3>
       <div className="metric-grid">
         <Metric label="report_id" value={report.report_id} />
+        <Metric label="graph_id" value={report.graph_id || "none"} />
         <Metric label="confidence" value={confidence(report.confidence)} />
         <Metric label="evidence chain" value={report.evidence_chain.length.toString()} />
         <Metric label="open questions" value={report.open_questions.length.toString()} />
@@ -1060,6 +1426,7 @@ function ReviewedReportView({ report }: { report: ReviewedRCAReport | null }) {
       <h3>ReviewedRCAReport</h3>
       <div className="metric-grid">
         <Metric label="report_id" value={report.report_id} />
+        <Metric label="graph_id" value={report.graph_id || "none"} />
         <Metric label="final confidence" value={confidence(report.final_confidence)} />
         <Metric label="approved" value={report.approved_findings.length.toString()} />
         <Metric label="rejected" value={report.rejected_findings.length.toString()} />
@@ -1080,6 +1447,7 @@ function IncidentRecordView({ record }: { record: IncidentRecord | null }) {
       <h3>IncidentRecord</h3>
       <div className="metric-grid">
         <Metric label="incident_id" value={record.incident_id} />
+        <Metric label="graph_id" value={record.graph_id || "none"} />
         <Metric label="dedup_key" value={record.dedup_key} />
         <Metric label="confirmed" value={record.confirmed_by_user ? "true" : "false"} />
         <Metric label="evidence" value={record.evidence_refs.length.toString()} />
@@ -1104,6 +1472,7 @@ function IncidentReadbackView({ record }: { record: IncidentRecord | null }) {
       <h3>Persisted readback</h3>
       <div className="metric-grid">
         <Metric label="incident_id" value={record.incident_id} />
+        <Metric label="graph_id" value={record.graph_id || "none"} />
         <Metric label="dedup_key" value={record.dedup_key} />
         <Metric label="updated" value={new Date(record.updated_at).toLocaleString()} />
         <Metric label="evidence" value={record.evidence_refs.length.toString()} />

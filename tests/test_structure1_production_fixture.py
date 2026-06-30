@@ -57,11 +57,12 @@ def test_query_graph_returns_local_enriched_contexts_after_indexing_production_f
     adapter = GitNexusCliCodeKnowledgeCoreAdapter(client=client)
     request = _production_fixture_request()
 
-    adapter.index_repo(request)
+    snapshot = adapter.index_repo(request)
 
     table_context, config_context, exception_context = _query_production_contexts(
         adapter,
         request,
+        snapshot.graph_id,
     )
 
     assert client.query_called is False
@@ -73,12 +74,12 @@ def test_query_graph_by_endpoint_returns_full_structure_chain_after_indexing_fix
     adapter = GitNexusCliCodeKnowledgeCoreAdapter(client=client)
     request = _production_fixture_request()
 
-    adapter.index_repo(request)
+    snapshot = adapter.index_repo(request)
 
     context = adapter.query_graph(
         GraphQuery(
             repo_id=request.repo_id,
-            graph_id=f"GRAPH-{request.repo_id}",
+            graph_id=snapshot.graph_id,
             query_terms=["/api/dataset/version"],
             node_filters=["API Endpoint"],
             edge_filters=[],
@@ -179,10 +180,10 @@ def test_real_gitnexus_index_supports_local_enriched_production_queries():
     adapter = _gitnexus_adapter_or_skip()
     request = _production_fixture_request()
 
-    _call_gitnexus(lambda: adapter.index_repo(request))
+    snapshot = _call_gitnexus(lambda: adapter.index_repo(request))
 
     table_context, config_context, exception_context = _call_gitnexus(
-        lambda: _query_production_contexts(adapter, request)
+        lambda: _query_production_contexts(adapter, request, snapshot.graph_id)
     )
 
     _assert_production_query_contexts(table_context, config_context, exception_context)
@@ -191,11 +192,12 @@ def test_real_gitnexus_index_supports_local_enriched_production_queries():
 def _query_production_contexts(
     adapter: GitNexusCliCodeKnowledgeCoreAdapter,
     request: RepoIndexRequest,
+    graph_id: str,
 ):
     table_context = adapter.query_graph(
         GraphQuery(
             repo_id=request.repo_id,
-            graph_id=f"GRAPH-{request.repo_id}",
+            graph_id=graph_id,
             query_terms=["dataset_version"],
             node_filters=["Table"],
             edge_filters=["READS_TABLE"],
@@ -207,7 +209,7 @@ def _query_production_contexts(
     config_context = adapter.query_graph(
         GraphQuery(
             repo_id=request.repo_id,
-            graph_id=f"GRAPH-{request.repo_id}",
+            graph_id=graph_id,
             query_terms=["legacy.dataset.cache-enabled"],
             node_filters=["Config"],
             edge_filters=[],
@@ -219,7 +221,7 @@ def _query_production_contexts(
     exception_context = adapter.query_graph(
         GraphQuery(
             repo_id=request.repo_id,
-            graph_id=f"GRAPH-{request.repo_id}",
+            graph_id=graph_id,
             query_terms=["DatasetNotFoundException"],
             node_filters=["Exception"],
             edge_filters=[],

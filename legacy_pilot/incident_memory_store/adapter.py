@@ -42,6 +42,15 @@ class IncidentMemoryStoreAdapter(ABC):
     ) -> list[IncidentMatch]:
         ...
 
+    @abstractmethod
+    def count_incidents_for_graph(
+        self,
+        *,
+        repo_id: str,
+        graph_id: str,
+    ) -> int:
+        ...
+
 
 class PostgresIncidentMemoryStoreAdapter(IncidentMemoryStoreAdapter):
     def __init__(
@@ -65,6 +74,7 @@ class PostgresIncidentMemoryStoreAdapter(IncidentMemoryStoreAdapter):
                         (
                             record.incident_id,
                             record.repo_id,
+                            record.graph_id,
                             record.dedup_key,
                             _json_payload(record.model_dump(mode="json")),
                             record.created_at,
@@ -124,18 +134,45 @@ class PostgresIncidentMemoryStoreAdapter(IncidentMemoryStoreAdapter):
         ]
         return _rank_similar_records(query=query, records=records, limit=limit)
 
+    def count_incidents_for_graph(
+        self,
+        *,
+        repo_id: str,
+        graph_id: str,
+    ) -> int:
+        try:
+            with self._connect(self.dsn) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(self._create_table_sql())
+                    cursor.execute(
+                        self._count_by_graph_sql(),
+                        (repo_id, graph_id, graph_id),
+                    )
+                    row = cursor.fetchone()
+        except Exception as exc:
+            raise IncidentMemoryStoreError(
+                "PostgreSQL incident memory store failed while counting incidents for graph.",
+                diagnostics={"error_type": exc.__class__.__name__},
+            ) from exc
+        return int(row[0]) if row else 0
+
     def _create_table_sql(self) -> str:
         return f"""
         CREATE TABLE IF NOT EXISTS {self.table_name} (
             incident_id TEXT PRIMARY KEY,
             repo_id TEXT NOT NULL,
+            graph_id TEXT NULL,
             dedup_key TEXT NOT NULL,
             record_json JSONB NOT NULL,
             created_at TIMESTAMPTZ NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL
         );
+        ALTER TABLE {self.table_name}
+            ADD COLUMN IF NOT EXISTS graph_id TEXT NULL;
         CREATE INDEX IF NOT EXISTS {self.table_name}_repo_id_idx
             ON {self.table_name} (repo_id);
+        CREATE INDEX IF NOT EXISTS {self.table_name}_repo_graph_idx
+            ON {self.table_name} (repo_id, graph_id);
         CREATE INDEX IF NOT EXISTS {self.table_name}_dedup_key_idx
             ON {self.table_name} (dedup_key)
         """
@@ -145,14 +182,16 @@ class PostgresIncidentMemoryStoreAdapter(IncidentMemoryStoreAdapter):
         INSERT INTO {self.table_name} (
             incident_id,
             repo_id,
+            graph_id,
             dedup_key,
             record_json,
             created_at,
             updated_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (incident_id) DO UPDATE SET
             repo_id = EXCLUDED.repo_id,
+            graph_id = EXCLUDED.graph_id,
             dedup_key = EXCLUDED.dedup_key,
             record_json = EXCLUDED.record_json,
             updated_at = EXCLUDED.updated_at
@@ -172,6 +211,14 @@ class PostgresIncidentMemoryStoreAdapter(IncidentMemoryStoreAdapter):
         WHERE repo_id = %s
         ORDER BY updated_at DESC
         LIMIT %s
+        """
+
+    def _count_by_graph_sql(self) -> str:
+        return f"""
+        SELECT COUNT(*)
+        FROM {self.table_name}
+        WHERE repo_id = %s
+          AND (graph_id = %s OR record_json->>'graph_id' = %s)
         """
 
 

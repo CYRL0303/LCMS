@@ -160,6 +160,7 @@ class QwenApiRCAReasoningEngineAdapter(RCAReasoningEngineAdapter):
             report_id=report.report_id,
             trace_id=report.trace_id,
             repo_id=report.repo_id,
+            graph_id=report.graph_id,
             approved_findings=[
                 report.selected_root_cause,
                 *report.suggested_fix,
@@ -328,6 +329,7 @@ def _report_from_qwen_payload(
         report_id=f"RCA-{bundle.trace_id.removeprefix('TRACE-')}",
         trace_id=bundle.trace_id,
         repo_id=bundle.repo_id,
+        graph_id=bundle.incident_query.graph_id,
         contract_version=bundle.contract_version,
         hypotheses=hypotheses,
         selected_root_cause=selected_root_cause,

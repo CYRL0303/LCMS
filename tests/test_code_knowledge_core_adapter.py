@@ -14,7 +14,7 @@ from legacy_pilot.code_knowledge_core.errors import (
     IndexingError,
     QueryError,
 )
-from legacy_pilot.code_knowledge_core.graph_store import DisabledGraphStore
+from legacy_pilot.code_knowledge_core.graph_store import DisabledGraphStore, GraphStoreRecord
 from legacy_pilot.contracts.enums import ExtractionMethod, SourceType
 from legacy_pilot.contracts.models import (
     Edge,
@@ -85,6 +85,12 @@ class RecordingFakeAdapter(CodeKnowledgeCoreAdapter):
             confidence=0.0,
         )
 
+    def list_graphs(self) -> list[GraphStoreRecord]:
+        return []
+
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Step 1 adapter-interface tests (unchanged intent, may reference new types)
@@ -130,6 +136,12 @@ class FakeAdapter(CodeKnowledgeCoreAdapter):
             evidence_refs=[evidence],
             confidence=0.5,
         )
+
+    def list_graphs(self) -> list[GraphStoreRecord]:
+        return []
+
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
+        return False
 
 
 class TestAdapterInterface:
@@ -360,6 +372,12 @@ class FakeGitNexusClient:
         }
 
 
+class FailingQueryGitNexusClient(FakeGitNexusClient):
+    def query_graph(self, query: GraphQuery) -> dict:
+        self.query_called = True
+        raise QueryError("GitNexus CLI failed while querying graph.", recoverable=True)
+
+
 class RecordingGraphStore(DisabledGraphStore):
     def __init__(self, payload_to_load=None):
         self.saved_payloads = []
@@ -421,9 +439,11 @@ class PersistenceFakeGitNexusClient:
 class TestGitNexusCliAdapter:
     def test_gitnexus_adapter_saves_enriched_payload_to_graph_store(self):
         graph_store = RecordingGraphStore()
+        frozen_now = datetime(2026, 6, 30, 10, 0, tzinfo=UTC)
         adapter = GitNexusCliCodeKnowledgeCoreAdapter(
             client=PersistenceFakeGitNexusClient(),
             graph_store=graph_store,
+            now=lambda: frozen_now,
         )
         request = RepoIndexRequest(
             repo_id="repo-store",
@@ -435,13 +455,15 @@ class TestGitNexusCliAdapter:
 
         snapshot = adapter.index_repo(request)
 
-        assert snapshot.graph_id == "GRAPH-repo-store"
+        assert snapshot.graph_id.startswith("GRAPH-repo-store-20260630T100000000000Z-")
+        assert snapshot.graph_id != "GRAPH-repo-store"
         assert graph_store.saved_payloads
         saved = graph_store.saved_payloads[0]
         assert saved["repo_id"] == "repo-store"
-        assert saved["graph_id"] == "GRAPH-repo-store"
+        assert saved["graph_id"] == snapshot.graph_id
         assert saved["payload"]["repo_id"] == "repo-store"
-        assert saved["payload"]["graph_id"] == "GRAPH-repo-store"
+        assert saved["payload"]["graph_id"] == snapshot.graph_id
+        assert saved["payload"]["metadata"]["source_graph_id"] == "GRAPH-repo-store"
 
     def test_gitnexus_adapter_loads_persisted_payload_when_local_cache_misses(self):
         persisted_payload = {
@@ -534,6 +556,55 @@ class TestGitNexusCliAdapter:
             ]
         ]
 
+    def test_restored_persisted_graph_not_found_does_not_fallback_to_gitnexus_query(self):
+        persisted_payload = {
+            "repo_id": "repo-store",
+            "graph_id": "GRAPH-repo-store",
+            "trace_id": "TRACE-INDEX-repo-store",
+            "nodes": [
+                {
+                    "id": "Method:DatasetService.getVersion",
+                    "type": "Method",
+                    "name": "DatasetService.getVersion",
+                    "qualifiedName": "DatasetService.getVersion",
+                    "source_type": "code",
+                    "extraction_method": "java_parser",
+                    "confidence": 0.9,
+                },
+            ],
+            "relationships": [],
+        }
+        graph_store = RecordingGraphStore(payload_to_load=persisted_payload)
+        client = FailingQueryGitNexusClient()
+        adapter = GitNexusCliCodeKnowledgeCoreAdapter(
+            client=client,
+            graph_store=graph_store,
+        )
+
+        context = adapter.query_graph(
+            GraphQuery(
+                repo_id="repo-store",
+                graph_id="GRAPH-repo-store",
+                query_terms=["UnknownError"],
+                node_filters=[],
+                edge_filters=[],
+                max_depth=4,
+                trace_id="TRACE-EMPTY",
+                contract_version="1.0.0",
+            )
+        )
+
+        assert graph_store.load_calls == [
+            {"repo_id": "repo-store", "graph_id": "GRAPH-repo-store"}
+        ]
+        assert client.query_called is False
+        assert context.trace_id == "TRACE-EMPTY"
+        assert context.matched_nodes == []
+        assert context.matched_edges == []
+        assert context.graph_paths == []
+        assert context.evidence_refs == []
+        assert context.confidence == 0.0
+
     def test_query_graph_does_not_restore_for_unsupported_local_query_plan(self):
         graph_store = FailingLoadGraphStore()
         client = FakeGitNexusClient()
@@ -558,7 +629,7 @@ class TestGitNexusCliAdapter:
         assert client.query_called is True
         assert context.trace_id == "TRACE-Q-IMPACT"
 
-    def test_query_graph_does_not_restore_when_loaded_local_index_returns_not_found(self):
+    def test_query_graph_returns_empty_context_when_local_index_has_no_match(self):
         graph_store = FailingLoadGraphStore()
         client = FakeGitNexusClient()
         adapter = GitNexusCliCodeKnowledgeCoreAdapter(
@@ -566,7 +637,7 @@ class TestGitNexusCliAdapter:
             graph_store=graph_store,
             index_enrichers=[],
         )
-        adapter.index_repo(
+        snapshot = adapter.index_repo(
             RepoIndexRequest(
                 repo_id="repo-store",
                 repo_uri="file:///repo-store",
@@ -579,7 +650,7 @@ class TestGitNexusCliAdapter:
         context = adapter.query_graph(
             GraphQuery(
                 repo_id="repo-store",
-                graph_id="GRAPH-GN",
+                graph_id=snapshot.graph_id,
                 query_terms=["MissingService.missingMethod"],
                 node_filters=["Method"],
                 max_depth=3,
@@ -589,8 +660,13 @@ class TestGitNexusCliAdapter:
         )
 
         assert graph_store.load_calls == []
-        assert client.query_called is True
+        assert client.query_called is False
         assert context.trace_id == "TRACE-Q-NOT-FOUND"
+        assert context.matched_nodes == []
+        assert context.matched_edges == []
+        assert context.graph_paths == []
+        assert context.evidence_refs == []
+        assert context.confidence == 0.0
 
     def test_index_repo_maps_client_payload_to_graph_snapshot(self):
         client = FakeGitNexusClient()
@@ -610,7 +686,8 @@ class TestGitNexusCliAdapter:
 
         assert client.index_called is True
         assert isinstance(snapshot, GraphSnapshot)
-        assert snapshot.graph_id == "GRAPH-GN"
+        assert snapshot.graph_id.startswith("GRAPH-repo-real-20260615T000000000000Z-")
+        assert snapshot.metadata["source_graph_id"] == "GRAPH-GN"
         assert snapshot.repo_id == "repo-real"
         assert snapshot.nodes[0].qualified_name == "DatasetService.getVersion"
         assert snapshot.evidence_refs

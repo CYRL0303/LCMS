@@ -199,7 +199,7 @@ def test_build_graph_query_uses_explicit_graph_id():
     assert graph_query == GraphQuery(
         repo_id="repo-demo",
         graph_id="GRAPH-explicit",
-        query_terms=["NullPointerException", "DatasetService.getVersion"],
+        query_terms=["DatasetService.getVersion", "NullPointerException"],
         node_filters=[],
         edge_filters=[],
         max_depth=4,
@@ -312,9 +312,9 @@ def test_graph_backed_adapter_queries_graph_and_builds_bundle():
 
     assert calls[0].graph_id == "GRAPH-repo-demo"
     assert calls[0].query_terms == [
-        "NullPointerException",
-        "DatasetService.getVersion",
         "/api/dataset/version",
+        "DatasetService.getVersion",
+        "NullPointerException",
     ]
     assert bundle.matched_nodes[0].name == "DatasetService.getVersion"
     assert bundle.code_evidence == [code]

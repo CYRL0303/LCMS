@@ -27,9 +27,15 @@ SubmitAlert
 Structure 1-4 are wired through the middleware contract with real opt-in
 integration coverage:
 
+- `repo_id` is the user/project-level repository alias. `graph_id` is the
+  concrete graph snapshot ID produced by a real `IndexRepo` run or selected
+  from persisted graphs.
 - Structure 1 uses real `gitnexus_cli` indexing/query integration, MyBatis SQL
   extraction, table/config/exception evidence, local graph indexing, and
   optional PostgreSQL graph payload persistence.
+- Structure 1 accepts local paths, `file://` URIs, GitHub HTTPS repo URLs, and
+  GitLab HTTPS repo URLs. Private GitHub/GitLab imports use the runtime tokens
+  supplied by the frontend settings modal or equivalent request headers.
 - Structure 1 semantic enrichment remains disabled by default, with opt-in real
   DashScope Qwen `qwen_api` mode.
 - Structure 2 owns `IncidentContextBuilderAdapter`. Default backend is
@@ -42,6 +48,11 @@ integration coverage:
   and records retry metadata without storing secrets.
 - Structure 4 owns PostgreSQL incident memory persistence for confirmed RCA
   records. The production factory only allows the real `postgresql` backend.
+- `RCAReport`, `ReviewedRCAReport`, and `IncidentRecord` carry `graph_id` so
+  saved incident memory remains tied to the graph snapshot that produced the
+  evidence.
+- The middleware exposes persisted graph listing/deletion. Deleting a graph is
+  blocked when Structure 4 has incident memory records referencing that graph.
 - Middleware routes SubmitAlert -> EvidenceBundle -> RCA generation/review ->
   incident save through Structure2, Structure3, and Structure4 boundaries, converting
   lower-structure failures into `ContractError` envelopes.
@@ -55,11 +66,17 @@ integration coverage:
 Latest local verification:
 
 ```text
-Default suite: 205 passed, 8 skipped, 1 warning
+Default suite: 230 passed, 8 skipped, 1 warning
 Real Structure1/PostgreSQL/Structure2/Structure3/Structure4 E2E: 3 passed, 2 warnings
 Real GitNexus + Structure1 production fixture: 12 passed, 2 warnings
 Real PostgreSQL graph store integration: 1 passed, 2 warnings
 Real Qwen semantic integration: 1 passed, 2 warnings
+Frontend build: passed
+Manual real browser E2E with existing graph: passed
+  - frontend: http://127.0.0.1:5173
+  - backend: gitnexus_cli / graph_context / qwen_api / postgresql
+  - existing graph: IBM / GRAPH-IBM
+  - saved incident: INC-ALERT-UI-OBS-1782822984366
 Secret scan: no persisted Qwen key in repository
 ```
 
@@ -169,12 +186,16 @@ GitNexus client controls:
 - `GITNEXUS_TIMEOUT_SECONDS`: backward-compatible fallback when the more
   specific timeout variables are not set.
 - `RepoIndexRequest.repo_uri` may be a local path, `file://` URI, or public
-  GitHub repository URL in the form `https://github.com/<owner>/<repo>`. GitHub
-  URLs are cloned with `git clone --depth 1` into
-  `LEGACY_PILOT_REPO_IMPORT_ROOT` before GitNexus analyzes the local checkout.
-- `LEGACY_PILOT_REPO_IMPORT_ROOT`: optional clone cache directory for GitHub
+  GitHub/GitLab repository URL in the form `https://github.com/<owner>/<repo>`
+  or `https://gitlab.com/<group>/<repo>`. Remote URLs are cloned with
+  `git clone --depth 1` into `LEGACY_PILOT_REPO_IMPORT_ROOT` before GitNexus
+  analyzes the local checkout.
+- Private GitHub imports use `X-LegacyPilot-GitHub-Token`; private GitLab
+  imports use `X-LegacyPilot-GitLab-Token`. The frontend settings modal stores
+  those tokens locally and sends them only to the middleware request.
+- `LEGACY_PILOT_REPO_IMPORT_ROOT`: optional clone cache directory for remote
   imports. Defaults to the OS temp directory under `legacy-pilot-repos`.
-- `LEGACY_PILOT_REPO_IMPORT_TIMEOUT_SECONDS`: timeout for GitHub clone.
+- `LEGACY_PILOT_REPO_IMPORT_TIMEOUT_SECONDS`: timeout for remote clone.
 
 Default backend: `gitnexus_cli`.
 There is no silent fallback to `mock`; GitNexus runtime failures become recoverable contract errors.
@@ -221,6 +242,11 @@ $env:LEGACY_PILOT_GRAPH_STORE_TABLE='legacy_pilot_graph_payloads'
 queryable plans with no process-local index, it reloads the payload from
 PostgreSQL and rebuilds the local index. Other LegacyPilot structures must not
 connect to this database directly; they still use `/v1/graph/query`.
+
+Persisted graph records can be listed through `GET /v1/graphs`. `DELETE
+/v1/graphs/{repo_id}/{graph_id}` removes a graph payload only when no incident
+memory row references that graph. A blocked delete returns a recoverable
+`RESOURCE_IN_USE` contract error with the referencing incident count.
 
 The real PostgreSQL integration test is opt-in. Set
 `LEGACY_PILOT_RUN_POSTGRES_GRAPH_STORE=1` and
@@ -286,8 +312,8 @@ $env:LEGACY_PILOT_INCIDENT_MEMORY_TABLE='legacy_pilot_incident_records'
 ```
 
 `SaveIncident` stores user-confirmed RCA records through Structure 4. PostgreSQL
-rows keep the full `IncidentRecord` JSON plus `incident_id`, `repo_id`, and
-`dedup_key` columns for lookup/upsert.
+rows keep the full `IncidentRecord` JSON plus `incident_id`, `repo_id`,
+`graph_id`, and `dedup_key` columns for lookup/upsert.
 `FindSimilarIncidents` and `GET /v1/incidents/{incident_id}` read through the
 same Structure 4 store; the product path no longer returns hardcoded incident
 matches. Missing PostgreSQL DSN fails loudly; there is no in-memory production
@@ -347,11 +373,31 @@ starts middleware, starts the frontend through Playwright, and runs the real
 Structure1 -> PostgreSQL -> Structure2 -> Structure3 Qwen -> Structure4 flow
 from the browser.
 
+Keep the real backend and frontend running for manual browser testing:
+
+```powershell
+.\scripts\run-real-frontend-e2e.ps1 -StartOnly
+```
+
+Then open `http://127.0.0.1:5173`. A product-path manual run can either:
+
+- Enter a local path or `file://` URI in `Repo URI` and click `Index repo`.
+- Enter a GitHub/GitLab HTTPS repo URL in `Repo URI`; add a token in Settings
+  only for private repositories.
+- Select a persisted graph from `Existing graphs`, click `Use existing graph`,
+  fill `Alert ID` and `Raw log`, then click `Run full pipeline`.
+
+The settings modal stores the Qwen API key and GitHub/GitLab tokens in browser
+localStorage. The frontend does not call GitNexus, PostgreSQL, DashScope,
+GitHub, or GitLab directly; it forwards credentials to the middleware headers.
+
 ## API Surface
 
 - `GET /health`
 - `POST /v1/repos/index`
 - `POST /v1/graph/query`
+- `GET /v1/graphs`
+- `DELETE /v1/graphs/{repo_id}/{graph_id}`
 - `POST /v1/alerts/submit`
 - `POST /v1/evidence-bundles/build`
 - `POST /v1/incidents/similar`
@@ -367,6 +413,8 @@ from the browser.
 - Real Qwen semantic enrichment is available only through the opt-in `qwen_api` backend.
 - Semantic graph output is pending and confidence-capped; it is not treated as a trusted structural fact.
 - Structure 2 defaults to `graph_context`, which requires queryable Structure 1 graph context for useful evidence bundles.
-- GitHub repo import currently supports public `https://github.com/<owner>/<repo>`
-  repository URLs only; branch/tag/commit pinning and private repository tokens
-  are not implemented yet.
+- GitHub/GitLab repo import supports HTTPS clone URLs through `git clone
+  --depth 1`; branch/tag/commit pinning is not implemented yet.
+- Natural-language incidents must still produce enough graph evidence for
+  Structure 3. Very broad or poorly-matched incident text can fail at
+  `GenerateRCA` if Qwen returns conclusions without valid `evidence_ids`.

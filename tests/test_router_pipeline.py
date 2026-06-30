@@ -7,6 +7,7 @@ from legacy_pilot.code_knowledge_core.adapter import (
     GitNexusCliCodeKnowledgeCoreAdapter,
 )
 from legacy_pilot.code_knowledge_core.errors import IndexingError, QueryError
+from legacy_pilot.code_knowledge_core.graph_store import GraphStoreRecord
 from legacy_pilot.contracts.errors import ContractViolation
 from legacy_pilot.contracts.models import (
     AlertEvent,
@@ -60,6 +61,12 @@ class RecordingFakeAdapter(CodeKnowledgeCoreAdapter):
             confidence=0.0,
         )
 
+    def list_graphs(self) -> list[GraphStoreRecord]:
+        return []
+
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
+        return False
+
 
 class RecordingGraphContextRouter(MiddlewareRouter):
     def __init__(self, **kwargs):
@@ -78,6 +85,12 @@ class FailingFakeAdapter(CodeKnowledgeCoreAdapter):
     def query_graph(self, query: GraphQuery) -> GraphContext:
         raise QueryError("graph backend unavailable", recoverable=True)
 
+    def list_graphs(self) -> list[GraphStoreRecord]:
+        raise QueryError("graph backend unavailable", recoverable=True)
+
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
+        raise QueryError("graph backend unavailable", recoverable=True)
+
 
 class DiagnosticFailingFakeAdapter(CodeKnowledgeCoreAdapter):
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
@@ -93,6 +106,12 @@ class DiagnosticFailingFakeAdapter(CodeKnowledgeCoreAdapter):
             recoverable=True,
             diagnostics={"stderr": "Traceback: internal secret", "returncode": "17"},
         )
+
+    def list_graphs(self) -> list[GraphStoreRecord]:
+        return []
+
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
+        return False
 
 
 class RecordingIncidentContextAdapter(IncidentContextBuilderAdapter):
@@ -160,11 +179,19 @@ class RecordingIncidentMemoryStoreAdapter(IncidentMemoryStoreAdapter):
             )
         return matches[:limit]
 
+    def count_incidents_for_graph(self, *, repo_id: str, graph_id: str) -> int:
+        return sum(
+            1
+            for record in self.saved_records
+            if record.repo_id == repo_id and record.graph_id == graph_id
+        )
+
 
 def alert_event() -> AlertEvent:
     return AlertEvent(
         alert_id="ALERT-001",
         repo_id="repo-demo",
+        graph_id="GRAPH-repo-demo-20260630T100000000000Z-abc123",
         raw_log=(
             "java.lang.NullPointerException: Cannot invoke getDatasetId "
             "at DatasetService.getVersion(DatasetService.java:42)"
@@ -317,18 +344,47 @@ def test_pipeline_produces_qwen_evidence_backed_rca_and_incident_record():
 
     assert bundle.trace_id == query.trace_id
     assert bundle.contract_version == query.contract_version
+    assert query.graph_id == "GRAPH-repo-demo-20260630T100000000000Z-abc123"
+    assert bundle.incident_query.graph_id == query.graph_id
     assert bundle.code_evidence
     assert bundle.log_evidence
+    assert report.graph_id == query.graph_id
     assert report.selected_root_cause.summary == "datasetId guard missing"
     assert {ref.evidence_id for ref in report.evidence_chain}.issubset(
         {ref.evidence_id for ref in [*bundle.code_evidence, *bundle.log_evidence]}
     )
+    assert reviewed.graph_id == report.graph_id
     assert reviewed.final_confidence == report.confidence
+    assert record.graph_id == reviewed.graph_id
     assert record.confirmed_by_user is True
     assert record.evidence_refs
     assert record.dedup_key.startswith("repo-demo:NullPointerException:")
     assert record.related_files == ["src/main/java/DatasetService.java"]
     assert memory_store.saved_records == [record]
+
+
+def test_save_incident_requires_reviewed_report_graph_id():
+    router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=RecordingIncidentMemoryStoreAdapter(),
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
+    )
+    report = router.generate_rca(router.build_evidence_bundle(router.submit_alert(alert_event())))
+    reviewed = router.review_rca(report).model_copy(update={"graph_id": None})
+
+    with pytest.raises(ContractViolation) as excinfo:
+        router.save_incident(
+            reviewed_report=reviewed,
+            user_confirmation=True,
+            fix_outcome="fixed by adding validation",
+            retention_policy="demo-30-days",
+            contract_version="1.0.0",
+        )
+
+    error = excinfo.value.error
+    assert error.error_code == "VALIDATION_ERROR"
+    assert error.source_module == "incident_memory_store"
+    assert "graph_id" in error.message
 
 
 def test_save_incident_defaults_to_real_incident_memory_backend_and_fails_loud(

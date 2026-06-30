@@ -1,4 +1,5 @@
 import os
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -28,7 +29,9 @@ from legacy_pilot.code_knowledge_core.gitnexus_mapper import (
 from legacy_pilot.code_knowledge_core.graph_store import (
     GraphStore,
     GraphStoreError,
+    GraphStoreRecord,
     create_graph_store,
+    payload_hash,
 )
 from legacy_pilot.code_knowledge_core.local_graph_index import LocalGraphIndex
 from legacy_pilot.code_knowledge_core.query_planner import (
@@ -83,6 +86,16 @@ class CodeKnowledgeCoreAdapter(ABC):
         """Query the code knowledge graph and return a traceable context."""
         ...
 
+    @abstractmethod
+    def list_graphs(self) -> list[GraphStoreRecord]:
+        """List persisted graph snapshots available for reuse."""
+        ...
+
+    @abstractmethod
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
+        """Delete a persisted graph snapshot."""
+        ...
+
 
 class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
     """Real Code Knowledge Core adapter backed by GitNexus CLI output."""
@@ -134,6 +147,11 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
                 parser_version=self._index_parser_version,
             )
         payload = _with_semantic_enrichment(payload, self._semantic_enricher)
+        payload = _with_snapshot_graph_id(
+            payload,
+            repo_id=request.repo_id,
+            generated_at=self._now(),
+        )
         graph_id = _payload_graph_id(payload, request.repo_id)
         self._save_persisted_payload(
             repo_id=request.repo_id,
@@ -168,7 +186,9 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
     def query_graph(self, query: GraphQuery) -> GraphContext:
         plan = plan_graph_query(query)
         local_payload = self._query_local_index(query, plan=plan)
-        if local_payload is not None and local_payload.get("not_found") is not True:
+        if local_payload is not None and local_payload.get("not_found") is True:
+            return map_query_payload(local_payload, query=query, now=self._now)
+        if local_payload is not None:
             return map_query_payload(
                 self._with_query_enrichers(local_payload, query),
                 query=query,
@@ -194,6 +214,8 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
                         query=query,
                         now=self._now,
                     )
+                if local_payload is not None:
+                    return map_query_payload(local_payload, query=query, now=self._now)
 
         payload = self._client.query_graph(query)
         payload = self._with_query_enrichers(payload, query)
@@ -252,6 +274,31 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
             _run_query_enrichers(self._query_enrichers, query),
         )
 
+    def list_graphs(self) -> list[GraphStoreRecord]:
+        try:
+            return self._graph_store.list_payloads()
+        except GraphStoreError as exc:
+            raise QueryError(
+                exc.message,
+                recoverable=True,
+                diagnostics=exc.diagnostics,
+            ) from exc
+
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
+        try:
+            deleted = self._graph_store.delete_payload(
+                repo_id=repo_id,
+                graph_id=graph_id,
+            )
+        except GraphStoreError as exc:
+            raise QueryError(
+                exc.message,
+                recoverable=True,
+                diagnostics=exc.diagnostics,
+            ) from exc
+        self._local_indexes.pop((repo_id, graph_id), None)
+        return deleted
+
 
 class UnsupportedCodeKnowledgeCoreBackendAdapter(CodeKnowledgeCoreAdapter):
     """Failing adapter used so router contract gates still run first."""
@@ -263,6 +310,12 @@ class UnsupportedCodeKnowledgeCoreBackendAdapter(CodeKnowledgeCoreAdapter):
         raise IndexingError(self._message(), recoverable=True)
 
     def query_graph(self, query: GraphQuery) -> GraphContext:
+        raise QueryError(self._message(), recoverable=True)
+
+    def list_graphs(self) -> list[GraphStoreRecord]:
+        raise QueryError(self._message(), recoverable=True)
+
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
         raise QueryError(self._message(), recoverable=True)
 
     def _message(self) -> str:
@@ -358,6 +411,43 @@ def _with_semantic_enrichment(
     }
     enriched["metadata"] = metadata
     return enriched
+
+
+def _with_snapshot_graph_id(
+    payload: dict[str, Any],
+    *,
+    repo_id: str,
+    generated_at: datetime,
+) -> dict[str, Any]:
+    original_graph_id = _payload_graph_id(payload, repo_id)
+    enriched = dict(payload)
+    metadata = payload.get("metadata")
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    metadata.setdefault("source_graph_id", original_graph_id)
+    graph_id = _snapshot_graph_id(
+        repo_id=repo_id,
+        payload=payload,
+        generated_at=generated_at,
+    )
+    enriched["repo_id"] = repo_id
+    enriched["graph_id"] = graph_id
+    enriched["metadata"] = metadata
+    return enriched
+
+
+def _snapshot_graph_id(
+    *,
+    repo_id: str,
+    payload: dict[str, Any],
+    generated_at: datetime,
+) -> str:
+    timestamp = generated_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"GRAPH-{_graph_id_slug(repo_id)}-{timestamp}-{payload_hash(payload)[:12]}"
+
+
+def _graph_id_slug(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-._")
+    return slug or "repo"
 
 
 def _payload_graph_id(payload: dict[str, Any], repo_id: str) -> str:

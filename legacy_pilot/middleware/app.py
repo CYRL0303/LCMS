@@ -6,6 +6,7 @@ from legacy_pilot.contracts.enums import ErrorCode
 from legacy_pilot.contracts.errors import ContractError, ContractViolation
 from legacy_pilot.contracts.models import (
     AlertEvent,
+    DeleteGraphResponse,
     EvidenceBundle,
     GraphContext,
     GraphQuery,
@@ -17,6 +18,7 @@ from legacy_pilot.contracts.models import (
     RepoIndexRequest,
     ReviewedRCAReport,
     SaveIncidentRequest,
+    StoredGraph,
 )
 from legacy_pilot.contracts.runtime_credentials import (
     RuntimeCredentials,
@@ -50,7 +52,10 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
     @app.exception_handler(ContractViolation)
     async def contract_violation_handler(_, exc: ContractViolation) -> JSONResponse:
         status_code = 400
-        if exc.error.error_code == ErrorCode.USER_CONFIRMATION_REQUIRED:
+        if exc.error.error_code in {
+            ErrorCode.USER_CONFIRMATION_REQUIRED,
+            ErrorCode.RESOURCE_IN_USE,
+        }:
             status_code = 409
         return JSONResponse(
             status_code=status_code,
@@ -109,6 +114,14 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
     @app.post("/v1/graph/query", response_model=GraphContext)
     async def query_graph(query: GraphQuery) -> GraphContext:
         return middleware_router.query_graph(query)
+
+    @app.get("/v1/graphs", response_model=list[StoredGraph])
+    async def list_graphs() -> list[StoredGraph]:
+        return middleware_router.list_graphs()
+
+    @app.delete("/v1/graphs/{repo_id}/{graph_id}", response_model=DeleteGraphResponse)
+    async def delete_graph(repo_id: str, graph_id: str) -> DeleteGraphResponse:
+        return middleware_router.delete_graph(repo_id=repo_id, graph_id=graph_id)
 
     @app.post("/v1/alerts/submit", response_model=IncidentQuery)
     async def submit_alert(alert: AlertEvent) -> IncidentQuery:

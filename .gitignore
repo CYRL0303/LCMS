@@ -23,3 +23,5 @@ frontend/playwright-report/
 frontend/.vite/
 frontend/.npm-cache/
 frontend/vite*.log
+.tmp/
+.e2e-artifacts/

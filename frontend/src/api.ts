@@ -48,13 +48,20 @@ export async function postJson<T>(
   return requestJson<T>("POST", path, body, options);
 }
 
+export async function deleteJson<T>(
+  path: string,
+  options: ApiCallOptions = {},
+): Promise<ApiCallResult<T>> {
+  return requestJson<T>("DELETE", path, undefined, options);
+}
+
 function endpoint(path: string): string {
   const normalizedBase = apiBase.endsWith("/") ? apiBase.slice(0, -1) : apiBase;
   return `${normalizedBase}${path}`;
 }
 
 async function requestJson<T>(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   body?: unknown,
   options: ApiCallOptions = {},

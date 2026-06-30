@@ -38,6 +38,8 @@ def test_disabled_graph_store_ignores_save_and_loads_nothing():
     )
 
     assert store.load_payload(repo_id="repo-a", graph_id="GRAPH-repo-a") is None
+    assert store.list_payloads() == []
+    assert store.delete_payload(repo_id="repo-a", graph_id="GRAPH-repo-a") is False
 
 
 class FakeCursor:
@@ -59,17 +61,28 @@ class FakeCursor:
         if self.last_query.lstrip().upper().startswith("SELECT"):
             self.connection.selected = True
 
+    @property
+    def rowcount(self):
+        return self.connection.rowcount
+
     def fetchone(self):
         if not self.connection.selected:
             return None
         return (self.connection.payload_to_return,)
 
+    def fetchall(self):
+        if not self.connection.selected:
+            return []
+        return list(self.connection.rows_to_return)
+
 
 class FakeConnection:
-    def __init__(self, payload_to_return=None):
+    def __init__(self, payload_to_return=None, rows_to_return=None, rowcount=0):
         self.executed = []
         self.selected = False
         self.payload_to_return = payload_to_return
+        self.rows_to_return = rows_to_return or []
+        self.rowcount = rowcount
 
     def __enter__(self):
         return self
@@ -82,12 +95,18 @@ class FakeConnection:
 
 
 class FakeConnector:
-    def __init__(self, payload_to_return=None):
+    def __init__(self, payload_to_return=None, rows_to_return=None, rowcount=0):
         self.connections = []
         self.payload_to_return = payload_to_return
+        self.rows_to_return = rows_to_return
+        self.rowcount = rowcount
 
     def __call__(self, dsn):
-        connection = FakeConnection(payload_to_return=self.payload_to_return)
+        connection = FakeConnection(
+            payload_to_return=self.payload_to_return,
+            rows_to_return=self.rows_to_return,
+            rowcount=self.rowcount,
+        )
         self.connections.append((dsn, connection))
         return connection
 
@@ -155,6 +174,73 @@ def test_postgres_graph_store_loads_payload():
     executed_sql = "\n".join(query for query, _ in connector.connections[0][1].executed)
     assert "SELECT payload_json" in executed_sql
     assert "WHERE repo_id = %s AND graph_id = %s" in executed_sql
+
+
+def test_postgres_graph_store_lists_real_payload_metadata():
+    created_at = datetime(2026, 6, 30, 10, 0, tzinfo=UTC)
+    updated_at = datetime(2026, 6, 30, 10, 5, tzinfo=UTC)
+    payload = {
+        "repo_id": "repo-a",
+        "graph_id": "GRAPH-repo-a-20260630T100000000000Z-abc123",
+        "nodes": [{"id": "A"}, {"id": "B"}],
+        "relationships": [{"id": "A_CALLS_B"}],
+    }
+    connector = FakeConnector(
+        rows_to_return=[
+            (
+                "repo-a",
+                "GRAPH-repo-a-20260630T100000000000Z-abc123",
+                "parser-v1",
+                "semantic-v1",
+                created_at,
+                updated_at,
+                payload,
+            )
+        ]
+    )
+    store = PostgresGraphStore(
+        dsn="postgresql://example/db",
+        table_name="legacy_pilot_graph_payloads_test",
+        connect=connector,
+    )
+
+    records = store.list_payloads()
+
+    assert len(records) == 1
+    assert records[0].repo_id == "repo-a"
+    assert records[0].graph_id == "GRAPH-repo-a-20260630T100000000000Z-abc123"
+    assert records[0].parser_version == "parser-v1"
+    assert records[0].semantic_enrichment_version == "semantic-v1"
+    assert records[0].created_at == created_at
+    assert records[0].updated_at == updated_at
+    assert records[0].node_count == 2
+    assert records[0].edge_count == 1
+    executed_sql = "\n".join(query for query, _ in connector.connections[0][1].executed)
+    assert "SELECT repo_id, graph_id" in executed_sql
+    assert "ORDER BY updated_at DESC" in executed_sql
+
+
+def test_postgres_graph_store_deletes_payload_by_repo_and_graph():
+    connector = FakeConnector(rowcount=1)
+    store = PostgresGraphStore(
+        dsn="postgresql://example/db",
+        table_name="legacy_pilot_graph_payloads_test",
+        connect=connector,
+    )
+
+    deleted = store.delete_payload(
+        repo_id="repo-a",
+        graph_id="GRAPH-repo-a-20260630T100000000000Z-abc123",
+    )
+
+    assert deleted is True
+    executed_sql = "\n".join(query for query, _ in connector.connections[0][1].executed)
+    assert "DELETE FROM legacy_pilot_graph_payloads_test" in executed_sql
+    assert "WHERE repo_id = %s AND graph_id = %s" in executed_sql
+    assert connector.connections[0][1].executed[-1][1] == (
+        "repo-a",
+        "GRAPH-repo-a-20260630T100000000000Z-abc123",
+    )
 
 
 def test_create_graph_store_selects_disabled_by_default(monkeypatch):

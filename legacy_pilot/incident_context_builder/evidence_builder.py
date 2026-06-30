@@ -16,7 +16,7 @@ def build_graph_query(query: IncidentQuery) -> GraphQuery:
     return GraphQuery(
         repo_id=query.repo_id,
         graph_id=graph_id_for_query(query),
-        query_terms=query.query_terms or [query.error_type],
+        query_terms=_graph_query_terms(query),
         node_filters=[],
         edge_filters=[],
         max_depth=4,
@@ -63,6 +63,29 @@ def _alert_summary(query: IncidentQuery) -> str:
     if query.suspected_location:
         return f"{query.error_type} near {query.suspected_location}"
     return query.error_type
+
+
+def _graph_query_terms(query: IncidentQuery) -> list[str]:
+    preferred = [
+        query.endpoint,
+        query.suspected_location,
+        *query.keywords,
+        *query.query_terms,
+        query.error_type,
+    ]
+    terms = _dedupe([term for term in preferred if term])
+    return terms or [query.error_type]
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output
 
 
 def _by_source_type(

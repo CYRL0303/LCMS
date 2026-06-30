@@ -31,6 +31,8 @@ class FakeCursor:
             self.connection.selected = True
 
     def fetchone(self):
+        if self.connection.count_to_return is not None:
+            return (self.connection.count_to_return,)
         if not self.connection.selected or self.connection.payload_to_return is None:
             return None
         return (self.connection.payload_to_return,)
@@ -42,11 +44,17 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, payload_to_return=None, payloads_to_return=None):
+    def __init__(
+        self,
+        payload_to_return=None,
+        payloads_to_return=None,
+        count_to_return=None,
+    ):
         self.executed = []
         self.selected = False
         self.payload_to_return = payload_to_return
         self.payloads_to_return = payloads_to_return or []
+        self.count_to_return = count_to_return
 
     def __enter__(self):
         return self
@@ -59,15 +67,22 @@ class FakeConnection:
 
 
 class FakeConnector:
-    def __init__(self, payload_to_return=None, payloads_to_return=None):
+    def __init__(
+        self,
+        payload_to_return=None,
+        payloads_to_return=None,
+        count_to_return=None,
+    ):
         self.connections = []
         self.payload_to_return = payload_to_return
         self.payloads_to_return = payloads_to_return
+        self.count_to_return = count_to_return
 
     def __call__(self, dsn):
         connection = FakeConnection(
             payload_to_return=self.payload_to_return,
             payloads_to_return=self.payloads_to_return,
+            count_to_return=self.count_to_return,
         )
         self.connections.append((dsn, connection))
         return connection
@@ -92,7 +107,8 @@ def test_postgres_incident_memory_store_upserts_record_json():
     insert_params = connector.connections[0][1].executed[1][1]
     assert insert_params[0] == "INC-ALERT-001"
     assert insert_params[1] == "repo-demo"
-    assert insert_params[2] == "repo-demo:NullPointerException:DatasetService.getVersion"
+    assert insert_params[2] == "GRAPH-repo-demo-20260630T100000000000Z-abc123"
+    assert insert_params[3] == "repo-demo:NullPointerException:DatasetService.getVersion"
 
 
 def test_postgres_incident_memory_store_loads_record_json():
@@ -159,6 +175,31 @@ def test_postgres_incident_memory_store_finds_similar_incidents_from_records():
     assert "WHERE repo_id = %s" in executed_sql
 
 
+def test_postgres_incident_memory_store_counts_incidents_for_graph():
+    connector = FakeConnector(count_to_return=7)
+    store = PostgresIncidentMemoryStoreAdapter(
+        dsn="postgresql://example/db",
+        table_name="legacy_pilot_incident_records_test",
+        connect=connector,
+    )
+
+    count = store.count_incidents_for_graph(
+        repo_id="repo-demo",
+        graph_id="GRAPH-repo-demo-20260630T100000000000Z-abc123",
+    )
+
+    assert count == 7
+    executed_sql = "\n".join(query for query, _ in connector.connections[0][1].executed)
+    assert "SELECT COUNT(*)" in executed_sql
+    assert "WHERE repo_id = %s" in executed_sql
+    assert "graph_id = %s" in executed_sql
+    assert connector.connections[0][1].executed[-1][1] == (
+        "repo-demo",
+        "GRAPH-repo-demo-20260630T100000000000Z-abc123",
+        "GRAPH-repo-demo-20260630T100000000000Z-abc123",
+    )
+
+
 def test_in_memory_incident_memory_store_finds_similar_confirmed_records_only():
     store = TestInMemoryIncidentMemoryStoreAdapter()
     record = incident_record()
@@ -186,6 +227,29 @@ def test_in_memory_incident_memory_store_finds_similar_confirmed_records_only():
     )
 
     assert [match.incident_id for match in matches] == ["INC-ALERT-001"]
+
+
+def test_in_memory_incident_memory_store_counts_records_for_graph():
+    store = TestInMemoryIncidentMemoryStoreAdapter()
+    record = incident_record()
+    store.save_incident(record)
+    store.save_incident(
+        record.model_copy(
+            update={
+                "incident_id": "INC-OTHER-GRAPH",
+                "graph_id": "GRAPH-other",
+                "dedup_key": "repo-demo:NullPointerException:other",
+            }
+        )
+    )
+
+    assert (
+        store.count_incidents_for_graph(
+            repo_id="repo-demo",
+            graph_id="GRAPH-repo-demo-20260630T100000000000Z-abc123",
+        )
+        == 1
+    )
 
 
 def test_incident_memory_factory_defaults_to_postgresql_and_requires_dsn(monkeypatch):
@@ -236,6 +300,7 @@ def incident_record() -> IncidentRecord:
     return IncidentRecord(
         incident_id="INC-ALERT-001",
         repo_id="repo-demo",
+        graph_id="GRAPH-repo-demo-20260630T100000000000Z-abc123",
         module="dataset-service",
         error_type="NullPointerException",
         symptom="NPE in DatasetService.getVersion",

@@ -92,6 +92,25 @@ class GraphSnapshot(ContractModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class StoredGraph(ContractModel):
+    repo_id: str
+    graph_id: str
+    parser_version: str | None = None
+    semantic_enrichment_version: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    node_count: int = Field(ge=0)
+    edge_count: int = Field(ge=0)
+    incident_memory_count: int = Field(ge=0)
+
+
+class DeleteGraphResponse(ContractModel):
+    repo_id: str
+    graph_id: str
+    deleted: bool
+    incident_memory_count: int = Field(ge=0)
+
+
 class GraphQuery(ContractModel):
     repo_id: str
     graph_id: str
@@ -166,6 +185,7 @@ class RCAReport(ContractModel):
     report_id: str
     trace_id: str
     repo_id: str
+    graph_id: str | None = None
     contract_version: str
     hypotheses: list[EvidenceBackedItem] = Field(min_length=1)
     selected_root_cause: EvidenceBackedItem
@@ -182,6 +202,7 @@ class ReviewedRCAReport(ContractModel):
     report_id: str
     trace_id: str
     repo_id: str
+    graph_id: str | None = None
     approved_findings: list[EvidenceBackedItem] = Field(default_factory=list)
     rejected_findings: list[str] = Field(default_factory=list)
     missing_evidence: list[str] = Field(default_factory=list)
@@ -200,6 +221,7 @@ class SaveIncidentRequest(ContractModel):
 class IncidentRecord(ContractModel):
     incident_id: str
     repo_id: str
+    graph_id: str | None = None
     module: str | None = None
     error_type: str
     symptom: str

@@ -87,6 +87,25 @@ export interface GraphSnapshot {
   metadata: Record<string, unknown>;
 }
 
+export interface StoredGraph {
+  repo_id: string;
+  graph_id: string;
+  parser_version?: string | null;
+  semantic_enrichment_version?: string | null;
+  created_at: string;
+  updated_at: string;
+  node_count: number;
+  edge_count: number;
+  incident_memory_count: number;
+}
+
+export interface DeleteGraphResponse {
+  repo_id: string;
+  graph_id: string;
+  deleted: boolean;
+  incident_memory_count: number;
+}
+
 export interface GraphQuery {
   repo_id: string;
   graph_id: string;
@@ -161,6 +180,7 @@ export interface RCAReport {
   report_id: string;
   trace_id: string;
   repo_id: string;
+  graph_id?: string | null;
   contract_version: ContractVersion;
   hypotheses: EvidenceBackedItem[];
   selected_root_cause: EvidenceBackedItem;
@@ -177,6 +197,7 @@ export interface ReviewedRCAReport {
   report_id: string;
   trace_id: string;
   repo_id: string;
+  graph_id?: string | null;
   approved_findings: EvidenceBackedItem[];
   rejected_findings: string[];
   missing_evidence: string[];
@@ -195,6 +216,7 @@ export interface SaveIncidentRequest {
 export interface IncidentRecord {
   incident_id: string;
   repo_id: string;
+  graph_id?: string | null;
   module?: string | null;
   error_type: string;
   symptom: string;

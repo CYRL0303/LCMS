@@ -13,6 +13,7 @@ from legacy_pilot.contracts.enums import ErrorCode
 from legacy_pilot.contracts.errors import ContractError, ContractViolation
 from legacy_pilot.contracts.models import (
     AlertEvent,
+    DeleteGraphResponse,
     EvidenceBackedItem,
     EvidenceBundle,
     EvidenceRef,
@@ -25,6 +26,7 @@ from legacy_pilot.contracts.models import (
     RCAReport,
     RepoIndexRequest,
     ReviewedRCAReport,
+    StoredGraph,
 )
 from legacy_pilot.contracts.validators import ensure_supported_contract_version, ensure_trace_id
 from legacy_pilot.incident_context_builder.adapter import (
@@ -92,6 +94,68 @@ class MiddlewareRouter:
                 trace_id=query.trace_id,
                 error=exc,
             ) from exc
+
+    def list_graphs(self) -> list[StoredGraph]:
+        try:
+            records = self._code_knowledge_core_adapter.list_graphs()
+        except CodeKnowledgeCoreError as exc:
+            raise self._code_knowledge_core_error(
+                trace_id=None,
+                error=exc,
+            ) from exc
+        return [
+            StoredGraph(
+                repo_id=record.repo_id,
+                graph_id=record.graph_id,
+                parser_version=record.parser_version,
+                semantic_enrichment_version=record.semantic_enrichment_version,
+                created_at=record.created_at,
+                updated_at=record.updated_at,
+                node_count=record.node_count,
+                edge_count=record.edge_count,
+                incident_memory_count=self._incident_count_for_graph(
+                    repo_id=record.repo_id,
+                    graph_id=record.graph_id,
+                ),
+            )
+            for record in records
+        ]
+
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> DeleteGraphResponse:
+        incident_count = self._incident_count_for_graph(
+            repo_id=repo_id,
+            graph_id=graph_id,
+        )
+        if incident_count > 0:
+            noun = "incident memory" if incident_count == 1 else "incident memories"
+            raise ContractViolation(
+                ContractError(
+                    trace_id=None,
+                    error_code=ErrorCode.RESOURCE_IN_USE,
+                    message=(
+                        f"GraphSnapshot {repo_id}/{graph_id} is used by "
+                        f"{incident_count} {noun}; delete is blocked."
+                    ),
+                    source_module="incident_memory_store",
+                    recoverable=True,
+                )
+            )
+        try:
+            deleted = self._code_knowledge_core_adapter.delete_graph(
+                repo_id=repo_id,
+                graph_id=graph_id,
+            )
+        except CodeKnowledgeCoreError as exc:
+            raise self._code_knowledge_core_error(
+                trace_id=None,
+                error=exc,
+            ) from exc
+        return DeleteGraphResponse(
+            repo_id=repo_id,
+            graph_id=graph_id,
+            deleted=deleted,
+            incident_memory_count=incident_count,
+        )
 
     def submit_alert(self, alert: AlertEvent) -> IncidentQuery:
         ensure_supported_contract_version(alert.contract_version)
@@ -175,6 +239,17 @@ class MiddlewareRouter:
                 )
             )
         evidence_refs = self._collect_evidence(reviewed_report.approved_findings)
+        if not reviewed_report.graph_id:
+            raise ContractViolation(
+                ContractError(
+                    trace_id=reviewed_report.trace_id,
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                    message="IncidentRecord requires reviewed_report.graph_id.",
+                    source_module="incident_memory_store",
+                    recoverable=True,
+                    missing_fields=["graph_id"],
+                )
+            )
         if not evidence_refs:
             raise self._evidence_required(
                 trace_id=reviewed_report.trace_id,
@@ -191,6 +266,7 @@ class MiddlewareRouter:
         record = IncidentRecord(
             incident_id=f"INC-{reviewed_report.trace_id.removeprefix('TRACE-')}",
             repo_id=reviewed_report.repo_id,
+            graph_id=reviewed_report.graph_id,
             module=module,
             error_type=error_type,
             symptom=symptom,
@@ -284,6 +360,18 @@ class MiddlewareRouter:
         if self._incident_memory_store_adapter is None:
             self._incident_memory_store_adapter = create_incident_memory_store_adapter()
         return self._incident_memory_store_adapter
+
+    def _incident_count_for_graph(self, *, repo_id: str, graph_id: str) -> int:
+        try:
+            return self._incident_memory_store().count_incidents_for_graph(
+                repo_id=repo_id,
+                graph_id=graph_id,
+            )
+        except IncidentMemoryStoreError as exc:
+            raise self._incident_memory_store_error(
+                trace_id=None,
+                error=exc,
+            ) from exc
 
     def runtime_config(self) -> dict[str, str]:
         return {

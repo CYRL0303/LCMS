@@ -556,3 +556,73 @@ http://127.0.0.1:8000/docs
 ```text
 http://127.0.0.1:8000/health
 ```
+
+## 2026-06-30 Implementation Update
+
+This section records the current implemented middleware contract and supersedes
+older MVP/mock notes elsewhere in this file where they conflict.
+
+Runtime defaults:
+
+```text
+LEGACY_PILOT_CODE_CORE_BACKEND=gitnexus_cli
+LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND=graph_context
+LEGACY_PILOT_RCA_BACKEND=qwen_api
+LEGACY_PILOT_INCIDENT_MEMORY_BACKEND=postgresql
+```
+
+Production Structure 4 only allows PostgreSQL. Missing
+`LEGACY_PILOT_INCIDENT_MEMORY_DSN` fails loudly; there is no production memory
+fallback.
+
+Current request/response contract additions:
+
+- `AlertEvent.graph_id` is optional and lets the frontend use an existing graph.
+- `IncidentQuery.graph_id` carries the selected or indexed graph snapshot.
+- `RCAReport.graph_id`, `ReviewedRCAReport.graph_id`, and
+  `IncidentRecord.graph_id` preserve the graph snapshot that produced the RCA
+  evidence.
+- `StoredGraph` is returned by `GET /v1/graphs` and includes
+  `incident_memory_count`.
+- `DeleteGraphResponse` is returned by
+  `DELETE /v1/graphs/{repo_id}/{graph_id}`.
+
+Current HTTP API surface:
+
+```text
+GET    /health
+POST   /v1/repos/index
+POST   /v1/graph/query
+GET    /v1/graphs
+DELETE /v1/graphs/{repo_id}/{graph_id}
+POST   /v1/alerts/submit
+POST   /v1/evidence-bundles/build
+POST   /v1/incidents/similar
+POST   /v1/rca/generate
+POST   /v1/rca/review
+POST   /v1/incidents/save
+GET    /v1/incidents/{incident_id}
+```
+
+Runtime credential headers:
+
+```text
+X-LegacyPilot-Qwen-Api-Key
+X-LegacyPilot-GitHub-Token
+X-LegacyPilot-GitLab-Token
+```
+
+`repo_id` is the user/project-level repository alias. `graph_id` is a concrete
+graph snapshot ID. A single repo alias can have multiple graph snapshots.
+
+Graph deletion rule:
+
+```text
+DELETE /v1/graphs/{repo_id}/{graph_id}
+-> count Structure 4 incidents for repo_id + graph_id
+-> if count > 0, return RESOURCE_IN_USE
+-> otherwise delete Structure 1 persisted graph payload
+```
+
+The frontend product path uses the middleware only. It never talks directly to
+GitNexus, PostgreSQL, DashScope, GitHub, or GitLab.

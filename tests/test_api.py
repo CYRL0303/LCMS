@@ -5,7 +5,9 @@ from fastapi.testclient import TestClient
 from legacy_pilot.code_knowledge_core.adapter import (
     CodeKnowledgeCoreAdapter,
 )
+from legacy_pilot.code_knowledge_core.graph_store import GraphStoreRecord
 from legacy_pilot.contracts.models import (
+    EvidenceRef,
     GraphContext,
     GraphQuery,
     GraphSnapshot,
@@ -23,7 +25,7 @@ from tests.fakes import TestCodeKnowledgeCoreAdapter
 
 def alert_payload(
     contract_version: str = "1.0.0",
-    graph_id: str | None = None,
+    graph_id: str | None = "GRAPH-DEMO",
 ) -> dict:
     payload = {
         "alert_id": "ALERT-001",
@@ -46,6 +48,7 @@ def alert_payload(
 class ApiFakeAdapter(CodeKnowledgeCoreAdapter):
     def __init__(self):
         self.query_called = False
+        self.deleted_graphs = []
 
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
         raise AssertionError("index_repo was not expected")
@@ -60,6 +63,24 @@ class ApiFakeAdapter(CodeKnowledgeCoreAdapter):
             evidence_refs=[],
             confidence=0.0,
         )
+
+    def list_graphs(self) -> list[GraphStoreRecord]:
+        return [
+            GraphStoreRecord(
+                repo_id="repo-demo",
+                graph_id="GRAPH-X",
+                parser_version="parser-v1",
+                semantic_enrichment_version="semantic-v1",
+                created_at=datetime(2026, 6, 30, 10, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 6, 30, 10, 5, tzinfo=UTC),
+                node_count=3,
+                edge_count=2,
+            )
+        ]
+
+    def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
+        self.deleted_graphs.append((repo_id, graph_id))
+        return True
 
 
 class ApiMemoryStoreAdapter(IncidentMemoryStoreAdapter):
@@ -98,6 +119,13 @@ class ApiMemoryStoreAdapter(IncidentMemoryStoreAdapter):
                 )
             )
         return matches[:limit]
+
+    def count_incidents_for_graph(self, *, repo_id: str, graph_id: str) -> int:
+        return sum(
+            1
+            for record in self.saved_records
+            if record.repo_id == repo_id and record.graph_id == graph_id
+        )
 
 
 def qwen_rca_adapter_for_existing_mock_bundle() -> QwenApiRCAReasoningEngineAdapter:
@@ -341,6 +369,74 @@ def test_create_app_with_custom_router_preserves_injection_path():
     assert response.json()["graph_paths"] == [["custom-router"]]
 
 
+def test_graph_list_endpoint_returns_stored_graphs_with_incident_counts():
+    adapter = ApiFakeAdapter()
+    memory_store = ApiMemoryStoreAdapter()
+    memory_store.save_incident(api_incident_record(graph_id="GRAPH-X"))
+    router = MiddlewareRouter(
+        code_knowledge_core_adapter=adapter,
+        incident_memory_store_adapter=memory_store,
+    )
+    client = TestClient(create_app(router=router))
+
+    response = client.get("/v1/graphs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == [
+        {
+            "repo_id": "repo-demo",
+            "graph_id": "GRAPH-X",
+            "parser_version": "parser-v1",
+            "semantic_enrichment_version": "semantic-v1",
+            "created_at": "2026-06-30T10:00:00Z",
+            "updated_at": "2026-06-30T10:05:00Z",
+            "node_count": 3,
+            "edge_count": 2,
+            "incident_memory_count": 1,
+        }
+    ]
+
+
+def test_graph_delete_endpoint_blocks_graph_referenced_by_incident_memory():
+    adapter = ApiFakeAdapter()
+    memory_store = ApiMemoryStoreAdapter()
+    memory_store.save_incident(api_incident_record(graph_id="GRAPH-X"))
+    router = MiddlewareRouter(
+        code_knowledge_core_adapter=adapter,
+        incident_memory_store_adapter=memory_store,
+    )
+    client = TestClient(create_app(router=router))
+
+    response = client.delete("/v1/graphs/repo-demo/GRAPH-X")
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error_code"] == "RESOURCE_IN_USE"
+    assert "1 incident memory" in body["message"]
+    assert adapter.deleted_graphs == []
+
+
+def test_graph_delete_endpoint_deletes_unreferenced_graph():
+    adapter = ApiFakeAdapter()
+    router = MiddlewareRouter(
+        code_knowledge_core_adapter=adapter,
+        incident_memory_store_adapter=ApiMemoryStoreAdapter(),
+    )
+    client = TestClient(create_app(router=router))
+
+    response = client.delete("/v1/graphs/repo-demo/GRAPH-X")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "repo_id": "repo-demo",
+        "graph_id": "GRAPH-X",
+        "deleted": True,
+        "incident_memory_count": 0,
+    }
+    assert adapter.deleted_graphs == [("repo-demo", "GRAPH-X")]
+
+
 def test_unsupported_contract_version_returns_contract_error_envelope():
     client = TestClient(create_app())
 
@@ -388,3 +484,40 @@ def test_missing_trace_id_returns_trace_required_error_envelope():
     assert body["source_module"] == "interface_contract_middleware"
     assert body["recoverable"] is True
     assert body["missing_fields"] == ["trace_id"]
+
+
+def api_incident_record(*, graph_id: str) -> IncidentRecord:
+    created_at = datetime(2026, 6, 30, tzinfo=UTC)
+    evidence = EvidenceRef(
+        evidence_id="EV-API-1",
+        trace_id="TRACE-API-1",
+        source_type="code",
+        source_id="DatasetService.java",
+        file_path="src/main/java/DatasetService.java",
+        start_line=40,
+        end_line=45,
+        excerpt="datasetId evidence",
+        excerpt_hash="hash-api-1",
+        extraction_method="java_parser",
+        confidence=0.9,
+        created_at=created_at,
+    )
+    return IncidentRecord(
+        incident_id=f"INC-{graph_id}",
+        repo_id="repo-demo",
+        graph_id=graph_id,
+        module="dataset-service",
+        error_type="NullPointerException",
+        symptom="NPE in DatasetService.getVersion",
+        root_cause="datasetId guard missing",
+        fix="add validation",
+        related_files=["DatasetService.java"],
+        related_nodes=["DatasetService.getVersion"],
+        evidence_refs=[evidence],
+        confirmed_by_user=True,
+        fix_outcome="verified",
+        dedup_key=f"repo-demo:NullPointerException:{graph_id}",
+        retention_policy="api-test",
+        created_at=created_at,
+        updated_at=created_at,
+    )

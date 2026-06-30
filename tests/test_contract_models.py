@@ -11,8 +11,10 @@ from legacy_pilot.contracts.models import (
     EvidenceRef,
     GraphSnapshot,
     GraphQuery,
+    IncidentRecord,
     IncidentQuery,
     RCAReport,
+    ReviewedRCAReport,
 )
 from legacy_pilot.contracts.validators import ensure_supported_contract_version, ensure_trace_id
 
@@ -134,6 +136,55 @@ def test_rca_report_rejects_root_cause_without_evidence():
         )
 
     assert "at least 1 item" in str(excinfo.value)
+
+
+def test_rca_and_incident_memory_models_carry_graph_id():
+    evidence = evidence_ref()
+    root_cause = EvidenceBackedItem(
+        summary="service dereferences a missing datasetId",
+        evidence_refs=[evidence],
+    )
+    report = RCAReport(
+        report_id="RCA-001",
+        trace_id="TRACE-001",
+        repo_id="repo-demo",
+        graph_id="GRAPH-repo-demo-20260630T100000000000Z-abc123",
+        contract_version="1.0.0",
+        hypotheses=[root_cause],
+        selected_root_cause=root_cause,
+        evidence_chain=[evidence],
+        suggested_fix=[root_cause],
+        migration_impact=root_cause,
+        confidence=0.82,
+    )
+    reviewed = ReviewedRCAReport(
+        report_id=report.report_id,
+        trace_id=report.trace_id,
+        repo_id=report.repo_id,
+        graph_id=report.graph_id,
+        approved_findings=[root_cause],
+        final_confidence=report.confidence,
+    )
+    record = IncidentRecord(
+        incident_id="INC-001",
+        repo_id=reviewed.repo_id,
+        graph_id=reviewed.graph_id,
+        error_type="NullPointerException",
+        symptom="NPE in DatasetService.getVersion",
+        root_cause=root_cause.summary,
+        fix="add validation",
+        evidence_refs=[evidence],
+        confirmed_by_user=True,
+        fix_outcome="verified",
+        dedup_key="repo-demo:NullPointerException:DatasetService.getVersion",
+        retention_policy="demo",
+        created_at=datetime(2026, 6, 30, tzinfo=UTC),
+        updated_at=datetime(2026, 6, 30, tzinfo=UTC),
+    )
+
+    assert report.model_dump()["graph_id"] == "GRAPH-repo-demo-20260630T100000000000Z-abc123"
+    assert reviewed.model_dump()["graph_id"] == report.graph_id
+    assert record.model_dump()["graph_id"] == report.graph_id
 
 
 def test_alert_event_accepts_contract_version_and_required_fields():
