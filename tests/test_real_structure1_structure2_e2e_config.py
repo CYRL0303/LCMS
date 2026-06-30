@@ -23,6 +23,9 @@ REQUIRED_ENV_KEYS = {
     "LEGACY_PILOT_GRAPH_STORE_TABLE",
     "LEGACY_PILOT_GRAPH_STORE_TEST_TABLE",
     "LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND",
+    "LEGACY_PILOT_INCIDENT_MEMORY_BACKEND",
+    "LEGACY_PILOT_INCIDENT_MEMORY_DSN",
+    "LEGACY_PILOT_INCIDENT_MEMORY_TABLE",
     "LEGACY_PILOT_RCA_BACKEND",
     "LEGACY_PILOT_RCA_BASE_URL",
     "LEGACY_PILOT_RCA_MODEL",
@@ -45,6 +48,7 @@ def test_env_example_documents_real_structure1_structure2_e2e_variables():
     assert env_values["LEGACY_PILOT_CODE_CORE_BACKEND"] == "gitnexus_cli"
     assert env_values["LEGACY_PILOT_GRAPH_STORE_BACKEND"] == "postgresql"
     assert env_values["LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND"] == "graph_context"
+    assert env_values["LEGACY_PILOT_INCIDENT_MEMORY_BACKEND"] == "postgresql"
     assert env_values["LEGACY_PILOT_RCA_BACKEND"] == "qwen_api"
     assert "127.0.0.1:55432" in env_values["LEGACY_PILOT_GRAPH_STORE_DSN"]
 
@@ -82,6 +86,9 @@ def test_real_e2e_script_starts_postgres_and_runs_real_chain():
     assert "DASHSCOPE_API_KEY" in script
     assert "LEGACY_PILOT_RUN_REAL_E2E" in script
     assert "LEGACY_PILOT_RCA_BACKEND" in script
+    assert "LEGACY_PILOT_INCIDENT_MEMORY_BACKEND" in script
+    assert "LEGACY_PILOT_INCIDENT_MEMORY_DSN" in script
+    assert "LEGACY_PILOT_INCIDENT_MEMORY_TABLE" in script
     assert "LEGACY_PILOT_RCA_REPAIR_ATTEMPTS" in script
     assert "qwen_api" in script
     assert "tests/test_real_structure1_structure2_e2e.py" in script

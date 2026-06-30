@@ -4,6 +4,8 @@ param(
     [string]$GitNexusRepoRoot = $env:GITNEXUS_REPO_ROOT,
     [string]$GraphStoreDsn = $env:LEGACY_PILOT_GRAPH_STORE_DSN,
     [string]$GraphStoreTable = $env:LEGACY_PILOT_GRAPH_STORE_TABLE,
+    [string]$IncidentMemoryDsn = $env:LEGACY_PILOT_INCIDENT_MEMORY_DSN,
+    [string]$IncidentMemoryTable = $env:LEGACY_PILOT_INCIDENT_MEMORY_TABLE,
     [string]$RcaBaseUrl = $env:LEGACY_PILOT_RCA_BASE_URL,
     [string]$RcaModel = $env:LEGACY_PILOT_RCA_MODEL,
     [string]$RcaConfidenceCap = $env:LEGACY_PILOT_RCA_CONFIDENCE_CAP,
@@ -68,6 +70,12 @@ if ([string]::IsNullOrWhiteSpace($GraphStoreDsn)) {
 }
 if ([string]::IsNullOrWhiteSpace($GraphStoreTable)) {
     $GraphStoreTable = "legacy_pilot_graph_payloads_structure3_e2e"
+}
+if ([string]::IsNullOrWhiteSpace($IncidentMemoryDsn)) {
+    $IncidentMemoryDsn = $GraphStoreDsn
+}
+if ([string]::IsNullOrWhiteSpace($IncidentMemoryTable)) {
+    $IncidentMemoryTable = "legacy_pilot_incident_records_structure4_e2e"
 }
 if ([string]::IsNullOrWhiteSpace($RcaBaseUrl)) {
     $RcaBaseUrl = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
@@ -202,6 +210,7 @@ $env:LEGACY_PILOT_RUN_REAL_E2E = "1"
 $env:LEGACY_PILOT_CODE_CORE_BACKEND = "gitnexus_cli"
 $env:LEGACY_PILOT_GRAPH_STORE_BACKEND = "postgresql"
 $env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND = "graph_context"
+$env:LEGACY_PILOT_INCIDENT_MEMORY_BACKEND = "postgresql"
 $env:LEGACY_PILOT_RCA_BACKEND = "qwen_api"
 $env:LEGACY_PILOT_RCA_BASE_URL = $RcaBaseUrl
 $env:LEGACY_PILOT_RCA_MODEL = $RcaModel
@@ -213,10 +222,12 @@ $env:GITNEXUS_INDEX_TIMEOUT_SECONDS = "120"
 $env:GITNEXUS_QUERY_TIMEOUT_SECONDS = "30"
 $env:LEGACY_PILOT_GRAPH_STORE_DSN = $GraphStoreDsn
 $env:LEGACY_PILOT_GRAPH_STORE_TABLE = $GraphStoreTable
+$env:LEGACY_PILOT_INCIDENT_MEMORY_DSN = $IncidentMemoryDsn
+$env:LEGACY_PILOT_INCIDENT_MEMORY_TABLE = $IncidentMemoryTable
 
 Push-Location $RepoRoot
 try {
-    Write-Host "Running real Structure1/PostgreSQL/Structure2/Structure3 E2E..."
+    Write-Host "Running real Structure1/PostgreSQL/Structure2/Structure3/Structure4 E2E..."
     & python -m pytest @PytestArgs
     exit $LASTEXITCODE
 }

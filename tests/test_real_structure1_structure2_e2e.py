@@ -10,6 +10,7 @@ from legacy_pilot.code_knowledge_core.errors import CodeKnowledgeCoreError
 from legacy_pilot.code_knowledge_core.gitnexus_client import GitNexusCliClient
 from legacy_pilot.code_knowledge_core.graph_store import PostgresGraphStore
 from legacy_pilot.contracts.models import AlertEvent, GraphQuery, RepoIndexRequest
+from legacy_pilot.incident_memory_store.adapter import PostgresIncidentMemoryStoreAdapter
 from legacy_pilot.middleware.router import MiddlewareRouter
 
 
@@ -20,6 +21,7 @@ REQUIRED_ENV_KEYS = (
     "GITNEXUS_BIN",
     "GITNEXUS_REPO_ROOT",
     "LEGACY_PILOT_GRAPH_STORE_DSN",
+    "LEGACY_PILOT_INCIDENT_MEMORY_DSN",
     "DASHSCOPE_API_KEY",
 )
 REQUIRED_ENV_VALUES = {
@@ -27,6 +29,7 @@ REQUIRED_ENV_VALUES = {
     "LEGACY_PILOT_GRAPH_STORE_BACKEND": "postgresql",
     "LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND": "graph_context",
     "LEGACY_PILOT_RCA_BACKEND": "qwen_api",
+    "LEGACY_PILOT_INCIDENT_MEMORY_BACKEND": "postgresql",
 }
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "java_spring_production_demo"
 
@@ -98,6 +101,14 @@ def test_real_gitnexus_postgres_structure2_e2e():
         retention_policy="e2e-test",
         contract_version="1.0.0",
     )
+    incident_memory = PostgresIncidentMemoryStoreAdapter(
+        dsn=os.environ["LEGACY_PILOT_INCIDENT_MEMORY_DSN"],
+        table_name=os.getenv(
+            "LEGACY_PILOT_INCIDENT_MEMORY_TABLE",
+            "legacy_pilot_incident_records_e2e",
+        ),
+    )
+    persisted_record = incident_memory.load_incident(record.incident_id)
     bundle_evidence_ids = _bundle_evidence_ids(bundle)
     report_evidence_ids = _report_evidence_ids(report)
     reviewed_evidence_ids = _reviewed_evidence_ids(reviewed)
@@ -129,6 +140,7 @@ def test_real_gitnexus_postgres_structure2_e2e():
     assert record.incident_id == "INC-ALERT-PG-GITNEXUS-E2E"
     assert record.confirmed_by_user is True
     assert record.evidence_refs
+    assert persisted_record == record
 
 
 class QueryForbiddenClient:
@@ -154,7 +166,7 @@ def _real_e2e_skip_reason() -> str | None:
     if not missing_keys:
         return None
     return (
-        "Real Structure1/PostgreSQL/Structure2/Structure3 E2E is opt-in; set "
+        "Real Structure1/PostgreSQL/Structure2/Structure3/Structure4 E2E is opt-in; set "
         f"{', '.join(missing_keys)} to run against local GitNexus, PostgreSQL, "
         "and Qwen."
     )
@@ -247,6 +259,7 @@ def _call_structure1(operation):
         return operation()
     except CodeKnowledgeCoreError as exc:
         pytest.fail(
-            "Real Structure1/PostgreSQL/Structure2 E2E failed at Structure1: "
+            "Real Structure1/PostgreSQL/Structure2/Structure3/Structure4 E2E "
+            "failed at Structure1: "
             f"{exc.message}; diagnostics={exc.diagnostics}"
         )

@@ -28,6 +28,11 @@ from legacy_pilot.incident_context_builder.adapter import (
     IncidentContextBuilderAdapter,
     create_incident_context_builder_adapter,
 )
+from legacy_pilot.incident_memory_store.adapter import (
+    IncidentMemoryStoreAdapter,
+    IncidentMemoryStoreError,
+    create_incident_memory_store_adapter,
+)
 from legacy_pilot.rca_reasoning_engine.adapter import (
     RCAReasoningEngineAdapter,
     create_rca_reasoning_engine_adapter,
@@ -42,6 +47,7 @@ class MiddlewareRouter:
         *,
         code_knowledge_core_adapter: CodeKnowledgeCoreAdapter | None = None,
         incident_context_builder_adapter: IncidentContextBuilderAdapter | None = None,
+        incident_memory_store_adapter: IncidentMemoryStoreAdapter | None = None,
         rca_reasoning_engine_adapter: RCAReasoningEngineAdapter | None = None,
     ):
         self._now = now or (lambda: datetime.now(UTC))
@@ -62,6 +68,7 @@ class MiddlewareRouter:
         self._rca_reasoning_engine_adapter = (
             rca_reasoning_engine_adapter or create_rca_reasoning_engine_adapter()
         )
+        self._incident_memory_store_adapter = incident_memory_store_adapter
 
     def index_repo(self, request: RepoIndexRequest) -> GraphSnapshot:
         ensure_supported_contract_version(request.contract_version)
@@ -171,7 +178,7 @@ class MiddlewareRouter:
         now = self._now()
         root_cause = reviewed_report.approved_findings[0].summary
         fix = reviewed_report.approved_findings[1].summary if len(reviewed_report.approved_findings) > 1 else ""
-        return IncidentRecord(
+        record = IncidentRecord(
             incident_id=f"INC-{reviewed_report.trace_id.removeprefix('TRACE-')}",
             repo_id=reviewed_report.repo_id,
             module="dataset-service",
@@ -193,6 +200,13 @@ class MiddlewareRouter:
             created_at=now,
             updated_at=now,
         )
+        try:
+            return self._incident_memory_store().save_incident(record)
+        except IncidentMemoryStoreError as exc:
+            raise self._incident_memory_store_error(
+                trace_id=reviewed_report.trace_id,
+                error=exc,
+            ) from exc
 
     def _evidence_ref(
         self,
@@ -266,6 +280,27 @@ class MiddlewareRouter:
                 missing_fields=error.missing_fields,
             )
         )
+
+    def _incident_memory_store_error(
+        self,
+        *,
+        trace_id: str,
+        error: IncidentMemoryStoreError,
+    ) -> ContractViolation:
+        return ContractViolation(
+            ContractError(
+                trace_id=trace_id,
+                error_code=ErrorCode.VALIDATION_ERROR,
+                message=error.message,
+                source_module="incident_memory_store",
+                recoverable=True,
+            )
+        )
+
+    def _incident_memory_store(self) -> IncidentMemoryStoreAdapter:
+        if self._incident_memory_store_adapter is None:
+            self._incident_memory_store_adapter = create_incident_memory_store_adapter()
+        return self._incident_memory_store_adapter
 
     def _collect_evidence(self, items: list[EvidenceBackedItem]) -> list[EvidenceRef]:
         evidence: list[EvidenceRef] = []

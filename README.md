@@ -8,9 +8,10 @@ LegacyPilot is a hackathon MVP for incident-driven legacy system analysis. This 
 - Enforces `contract_version`, `trace_id`, `confidence`, and `evidence_refs` gates.
 - Returns a unified `ContractError` envelope for middleware-level failures.
 - Exposes FastAPI routes for the MVP incident analysis flow.
-- Routes the MVP flow through Structure 2 `graph_context` and Structure 3
-  `qwen_api` by default; deterministic mock backends remain explicit test/demo
-  choices, and Structure 1 can opt in to the real `gitnexus_cli` backend.
+- Routes the MVP flow through Structure 2 `graph_context`, Structure 3
+  `qwen_api`, and Structure 4 PostgreSQL incident memory by default;
+  deterministic mock backends remain explicit test/demo choices, and
+  Structure 1 can opt in to the real `gitnexus_cli` backend.
 
 Default configured flow:
 
@@ -19,12 +20,12 @@ SubmitAlert
 -> BuildEvidenceBundle (Structure2 graph_context -> QueryGraph)
 -> GenerateRCA (Structure3 qwen_api)
 -> ReviewRCA
--> SaveIncident
+-> SaveIncident (Structure4 postgresql)
 ```
 
 ## Current Progress
 
-Structure 1-3 are wired through the middleware contract with real opt-in
+Structure 1-4 are wired through the middleware contract with real opt-in
 integration coverage:
 
 - Structure 1 uses real `gitnexus_cli` indexing/query integration, MyBatis SQL
@@ -41,12 +42,15 @@ integration coverage:
 - Structure 3 enforces evidence-backed RCA output, rejects unknown evidence
   IDs, retries invalid JSON/schema Qwen responses with bounded repair prompts,
   and records retry metadata without storing secrets.
+- Structure 4 owns PostgreSQL incident memory persistence for confirmed RCA
+  records. Default save backend is real `postgresql`; explicit in-memory mode is
+  test/demo only.
 - Middleware routes SubmitAlert -> EvidenceBundle -> RCA generation/review ->
-  incident save through Structure2 and Structure3 boundaries, converting
+  incident save through Structure2, Structure3, and Structure4 boundaries, converting
   lower-structure failures into `ContractError` envelopes.
 - Reusable PowerShell scripts start Docker Desktop/PostgreSQL, load the
   persisted Qwen key, and run the real GitNexus + PostgreSQL + Structure2 +
-  Structure3 E2E chain.
+  Structure3 + Structure4 E2E chain.
 - Production fixture coverage proves `/api/dataset/version -> controller ->
   service -> mapper -> Mapper XML SQL -> dataset_version`, plus config and
   exception evidence.
@@ -55,7 +59,7 @@ Latest local verification:
 
 ```text
 Default suite: 205 passed, 8 skipped, 1 warning
-Real Structure1/PostgreSQL/Structure2/Structure3 E2E: 3 passed, 2 warnings
+Real Structure1/PostgreSQL/Structure2/Structure3/Structure4 E2E: 3 passed, 2 warnings
 Real GitNexus + Structure1 production fixture: 12 passed, 2 warnings
 Real PostgreSQL graph store integration: 1 passed, 2 warnings
 Real Qwen semantic integration: 1 passed, 2 warnings
@@ -88,6 +92,8 @@ legacy_pilot/
     adapter.py
     evidence_builder.py
     signals.py
+  incident_memory_store/
+    adapter.py
   middleware/
     app.py
     router.py
@@ -269,6 +275,26 @@ $env:DASHSCOPE_API_KEY='<new-key>'
 `.env.local`, then the Windows User `DASHSCOPE_API_KEY`, so a one-time persisted
 key is reused by later real E2E runs. `.env.local` is gitignored.
 
+### Structure 4 Incident Memory Store
+
+Default backend:
+
+```powershell
+$env:LEGACY_PILOT_INCIDENT_MEMORY_BACKEND='postgresql'
+$env:LEGACY_PILOT_INCIDENT_MEMORY_DSN='postgresql://legacy_pilot:legacy_pilot@127.0.0.1:55432/legacy_pilot?connect_timeout=5'
+$env:LEGACY_PILOT_INCIDENT_MEMORY_TABLE='legacy_pilot_incident_records'
+```
+
+Explicit in-memory backend for tests/demo only:
+
+```powershell
+$env:LEGACY_PILOT_INCIDENT_MEMORY_BACKEND='memory'
+```
+
+`SaveIncident` stores user-confirmed RCA records through Structure 4. PostgreSQL
+rows keep the full `IncidentRecord` JSON plus `incident_id`, `repo_id`, and
+`dedup_key` columns for lookup/upsert.
+
 ## Run The API
 
 ```bash
@@ -306,5 +332,5 @@ http://127.0.0.1:8000/health
 - Real Qwen semantic enrichment is available only through the opt-in `qwen_api` backend.
 - Semantic graph output is pending and confidence-capped; it is not treated as a trusted structural fact.
 - Structure 2 defaults to `graph_context`, which requires queryable Structure 1 graph context for useful evidence bundles.
-- No persistent incident database is connected yet.
 - Structure 2 deterministic mock responses require explicit `LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND=mock`.
+- Structure 4 in-memory incident storage requires explicit `LEGACY_PILOT_INCIDENT_MEMORY_BACKEND=memory`.

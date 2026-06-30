@@ -7,8 +7,10 @@ from legacy_pilot.contracts.models import (
     GraphContext,
     GraphQuery,
     GraphSnapshot,
+    IncidentRecord,
     RepoIndexRequest,
 )
+from legacy_pilot.incident_memory_store.adapter import IncidentMemoryStoreAdapter
 from legacy_pilot.middleware.app import create_app
 from legacy_pilot.middleware.router import MiddlewareRouter
 from legacy_pilot.rca_reasoning_engine.adapter import QwenApiRCAReasoningEngineAdapter
@@ -53,6 +55,21 @@ class ApiFakeAdapter(CodeKnowledgeCoreAdapter):
             evidence_refs=[],
             confidence=0.0,
         )
+
+
+class ApiMemoryStoreAdapter(IncidentMemoryStoreAdapter):
+    def __init__(self):
+        self.saved_records = []
+
+    def save_incident(self, record: IncidentRecord) -> IncidentRecord:
+        self.saved_records.append(record)
+        return record
+
+    def load_incident(self, incident_id: str) -> IncidentRecord | None:
+        for record in self.saved_records:
+            if record.incident_id == incident_id:
+                return record
+        return None
 
 
 def qwen_rca_adapter_for_existing_mock_bundle() -> QwenApiRCAReasoningEngineAdapter:
@@ -162,8 +179,10 @@ def test_generate_rca_endpoint_converts_unknown_qwen_evidence_id_to_contract_err
 
 
 def test_http_pipeline_builds_qwen_reviews_and_saves_incident():
+    memory_store = ApiMemoryStoreAdapter()
     router = MiddlewareRouter(
-        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle(),
+        incident_memory_store_adapter=memory_store,
     )
     client = TestClient(create_app(router=router))
 
@@ -194,6 +213,7 @@ def test_http_pipeline_builds_qwen_reviews_and_saves_incident():
     assert record["incident_id"] == "INC-ALERT-001"
     assert record["confirmed_by_user"] is True
     assert record["evidence_refs"]
+    assert memory_store.saved_records[0].incident_id == "INC-ALERT-001"
     assert bundle_response.json()["contract_version"] == "1.0.0"
     assert report_response.json()["contract_version"] == "1.0.0"
 

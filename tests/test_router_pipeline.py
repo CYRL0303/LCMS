@@ -16,6 +16,7 @@ from legacy_pilot.contracts.models import (
     GraphContext,
     GraphQuery,
     GraphSnapshot,
+    IncidentRecord,
     IncidentQuery,
     RCAReport,
     RepoIndexRequest,
@@ -24,6 +25,7 @@ from legacy_pilot.incident_context_builder.adapter import (
     GraphBackedIncidentContextBuilderAdapter,
     IncidentContextBuilderAdapter,
 )
+from legacy_pilot.incident_memory_store.adapter import IncidentMemoryStoreAdapter
 from legacy_pilot.middleware.router import MiddlewareRouter
 from legacy_pilot.rca_reasoning_engine.adapter import QwenApiRCAReasoningEngineAdapter
 
@@ -118,6 +120,21 @@ class RecordingIncidentContextAdapter(IncidentContextBuilderAdapter):
             alert_summary="InjectedError near Injected.location",
             incident_query=query,
         )
+
+
+class RecordingIncidentMemoryStoreAdapter(IncidentMemoryStoreAdapter):
+    def __init__(self):
+        self.saved_records = []
+
+    def save_incident(self, record: IncidentRecord) -> IncidentRecord:
+        self.saved_records.append(record)
+        return record
+
+    def load_incident(self, incident_id: str) -> IncidentRecord | None:
+        for record in self.saved_records:
+            if record.incident_id == incident_id:
+                return record
+        return None
 
 
 def alert_event() -> AlertEvent:
@@ -248,8 +265,10 @@ def test_router_converts_unknown_qwen_evidence_id_to_structure3_contract_error()
 
 
 def test_pipeline_produces_qwen_evidence_backed_rca_and_incident_record():
+    memory_store = RecordingIncidentMemoryStoreAdapter()
     router = MiddlewareRouter(
-        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle(),
+        incident_memory_store_adapter=memory_store,
     )
 
     query = router.submit_alert(alert_event())
@@ -276,6 +295,32 @@ def test_pipeline_produces_qwen_evidence_backed_rca_and_incident_record():
     assert record.confirmed_by_user is True
     assert record.evidence_refs
     assert record.dedup_key == "repo-demo:NullPointerException:DatasetService.getVersion"
+    assert memory_store.saved_records == [record]
+
+
+def test_save_incident_defaults_to_real_incident_memory_backend_and_fails_loud(
+    monkeypatch,
+):
+    monkeypatch.delenv("LEGACY_PILOT_INCIDENT_MEMORY_BACKEND", raising=False)
+    monkeypatch.delenv("LEGACY_PILOT_INCIDENT_MEMORY_DSN", raising=False)
+    router = MiddlewareRouter(
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
+    )
+    report = router.generate_rca(router.build_evidence_bundle(router.submit_alert(alert_event())))
+    reviewed = router.review_rca(report)
+
+    with pytest.raises(ContractViolation) as excinfo:
+        router.save_incident(
+            reviewed_report=reviewed,
+            user_confirmation=True,
+            fix_outcome="fixed by adding validation",
+            retention_policy="demo-30-days",
+            contract_version="1.0.0",
+        )
+
+    error = excinfo.value.error
+    assert error.source_module == "incident_memory_store"
+    assert "LEGACY_PILOT_INCIDENT_MEMORY_DSN" in error.message
 
 
 def test_find_similar_incidents_returns_confirmed_mock_match():
