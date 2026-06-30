@@ -66,10 +66,11 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
         )
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
+    async def health() -> dict[str, object]:
         return {
             "service": "legacy-pilot-interface-contract-middleware",
             "contract_version": SUPPORTED_CONTRACT_VERSION,
+            "backends": middleware_router.runtime_config(),
         }
 
     @app.post("/v1/repos/index", response_model=GraphSnapshot)
@@ -109,6 +110,10 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
             retention_policy=request.retention_policy,
             contract_version=request.contract_version,
         )
+
+    @app.get("/v1/incidents/{incident_id}", response_model=IncidentRecord)
+    async def load_incident(incident_id: str) -> IncidentRecord:
+        return middleware_router.load_incident(incident_id)
 
     return app
 

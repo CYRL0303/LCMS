@@ -10,3 +10,16 @@ uvicorn*.log
 tests/fixtures/java_spring_demo/.gitnexus/
 tests/fixtures/java_spring_production_demo/.gitnexus/
 .worktrees/
+.agents/
+.claude/skills/
+.playwright/
+.playwright-cli/
+.playwright-cli-cache/
+*.tsbuildinfo
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/.vite/
+frontend/.npm-cache/
+frontend/vite*.log

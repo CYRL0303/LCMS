@@ -4,10 +4,16 @@ import subprocess
 from collections.abc import Callable
 from hashlib import sha256
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 from legacy_pilot.code_knowledge_core.errors import IndexingError, QueryError
 from legacy_pilot.code_knowledge_core.query_planner import plan_graph_query
+from legacy_pilot.code_knowledge_core.repo_importer import (
+    RepoImportError,
+    ResolvedRepo,
+    _repo_path,
+    resolve_repo_uri,
+)
 from legacy_pilot.contracts.models import GraphQuery, RepoIndexRequest
 
 
@@ -75,7 +81,8 @@ class GitNexusCliClient:
         self.last_diagnostics: dict[str, str] = {}
 
     def index_repo(self, request: RepoIndexRequest) -> dict[str, Any]:
-        repo_path = self._validated_repo_path(request.repo_uri)
+        resolved_repo = self._validated_repo_path(request.repo_uri)
+        repo_path = resolved_repo.local_path
         if self.force_analyze:
             self._run_analyze(repo_path, request.repo_id)
             payload = self._run_index_cypher(request)
@@ -85,24 +92,33 @@ class GitNexusCliClient:
                 self._run_analyze(repo_path, request.repo_id)
                 payload = self._run_index_cypher(request)
         payload["repo_path"] = repo_path
+        if resolved_repo.metadata:
+            payload.setdefault("metadata", {}).update(resolved_repo.metadata)
         return payload
 
-    def _validated_repo_path(self, repo_uri: str) -> str:
+    def _validated_repo_path(self, repo_uri: str) -> ResolvedRepo:
         try:
-            repo_path = _local_repo_path(repo_uri)
+            resolved_repo = resolve_repo_uri(repo_uri, runner=self._runner)
         except ValueError:
             raise self._error(
                 "index",
-                "repo_uri must resolve to a local filesystem path.",
+                "repo_uri must resolve to a local filesystem path or GitHub URL.",
                 diagnostics={"repo_uri": repo_uri},
             ) from None
+        except RepoImportError as exc:
+            raise self._error(
+                "index",
+                exc.message,
+                diagnostics=exc.diagnostics,
+            ) from exc
+        repo_path = resolved_repo.local_path
         if not os.path.exists(repo_path):
             raise self._error(
                 "index",
                 "repo_uri path must exist before GitNexus analyze.",
                 diagnostics={"repo_uri": repo_uri, "repo_path": repo_path},
             )
-        return repo_path
+        return resolved_repo
 
     def _run_analyze(self, repo_path: str, repo_id: str) -> None:
         analyze_command = [
@@ -533,31 +549,6 @@ def _bool_config(value: bool | None, env_key: str, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     return default
-
-
-def _local_repo_path(repo_uri: str) -> str:
-    if _looks_like_windows_path(repo_uri):
-        return repo_uri
-    parsed = urlparse(repo_uri)
-    if parsed.scheme and parsed.scheme != "file":
-        raise ValueError("repo_uri is not a local path")
-    if parsed.scheme == "file" and parsed.netloc not in {"", "localhost"}:
-        raise ValueError("repo_uri is not a local path")
-    return _repo_path(repo_uri)
-
-
-def _repo_path(repo_uri: str) -> str:
-    if repo_uri.startswith("file://"):
-        parsed = urlparse(repo_uri)
-        path = unquote(parsed.path)
-        if os.name == "nt" and len(path) >= 3 and path[0] == "/" and path[2] == ":":
-            return path[1:]
-        return path
-    return repo_uri
-
-
-def _looks_like_windows_path(value: str) -> bool:
-    return len(value) >= 3 and value[1] == ":" and value[0].isalpha()
 
 
 def _has_graph_rows(payload: dict[str, Any]) -> bool:

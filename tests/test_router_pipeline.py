@@ -5,7 +5,6 @@ import pytest
 from legacy_pilot.code_knowledge_core.adapter import (
     CodeKnowledgeCoreAdapter,
     GitNexusCliCodeKnowledgeCoreAdapter,
-    MockCodeKnowledgeCoreAdapter,
 )
 from legacy_pilot.code_knowledge_core.errors import IndexingError, QueryError
 from legacy_pilot.contracts.errors import ContractViolation
@@ -16,6 +15,7 @@ from legacy_pilot.contracts.models import (
     GraphContext,
     GraphQuery,
     GraphSnapshot,
+    IncidentMatch,
     IncidentRecord,
     IncidentQuery,
     RCAReport,
@@ -28,6 +28,7 @@ from legacy_pilot.incident_context_builder.adapter import (
 from legacy_pilot.incident_memory_store.adapter import IncidentMemoryStoreAdapter
 from legacy_pilot.middleware.router import MiddlewareRouter
 from legacy_pilot.rca_reasoning_engine.adapter import QwenApiRCAReasoningEngineAdapter
+from tests.fakes import TestCodeKnowledgeCoreAdapter
 
 
 class RecordingFakeAdapter(CodeKnowledgeCoreAdapter):
@@ -136,6 +137,29 @@ class RecordingIncidentMemoryStoreAdapter(IncidentMemoryStoreAdapter):
                 return record
         return None
 
+    def find_similar_incidents(
+        self,
+        query: IncidentQuery,
+        *,
+        limit: int = 5,
+    ) -> list[IncidentMatch]:
+        matches = []
+        for record in self.saved_records:
+            if record.repo_id != query.repo_id or not record.confirmed_by_user:
+                continue
+            matches.append(
+                IncidentMatch(
+                    incident_id=record.incident_id,
+                    similarity=0.91,
+                    previous_root_cause=record.root_cause,
+                    previous_fix=record.fix,
+                    related_files=record.related_files,
+                    evidence_refs=record.evidence_refs,
+                    confirmed_by_user=record.confirmed_by_user,
+                )
+            )
+        return matches[:limit]
+
 
 def alert_event() -> AlertEvent:
     return AlertEvent(
@@ -220,7 +244,10 @@ def test_submit_alert_returns_traceable_incident_query():
 def test_generate_rca_requires_qwen_configuration_when_no_mock_backend(monkeypatch):
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     monkeypatch.delenv("LEGACY_PILOT_RCA_BACKEND", raising=False)
-    router = MiddlewareRouter()
+    router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=RecordingIncidentMemoryStoreAdapter(),
+    )
     bundle = router.build_evidence_bundle(router.submit_alert(alert_event()))
 
     with pytest.raises(ContractViolation) as excinfo:
@@ -235,6 +262,8 @@ def test_generate_rca_requires_qwen_configuration_when_no_mock_backend(monkeypat
 
 def test_router_delegates_generate_and_review_to_qwen_structure3_adapter():
     router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=RecordingIncidentMemoryStoreAdapter(),
         rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
     )
     bundle = router.build_evidence_bundle(router.submit_alert(alert_event()))
@@ -250,6 +279,8 @@ def test_router_delegates_generate_and_review_to_qwen_structure3_adapter():
 
 def test_router_converts_unknown_qwen_evidence_id_to_structure3_contract_error():
     router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=RecordingIncidentMemoryStoreAdapter(),
         rca_reasoning_engine_adapter=qwen_rca_adapter_with_unknown_evidence()
     )
     bundle = router.build_evidence_bundle(router.submit_alert(alert_event()))
@@ -267,6 +298,7 @@ def test_router_converts_unknown_qwen_evidence_id_to_structure3_contract_error()
 def test_pipeline_produces_qwen_evidence_backed_rca_and_incident_record():
     memory_store = RecordingIncidentMemoryStoreAdapter()
     router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
         rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle(),
         incident_memory_store_adapter=memory_store,
     )
@@ -294,7 +326,8 @@ def test_pipeline_produces_qwen_evidence_backed_rca_and_incident_record():
     assert reviewed.final_confidence == report.confidence
     assert record.confirmed_by_user is True
     assert record.evidence_refs
-    assert record.dedup_key == "repo-demo:NullPointerException:DatasetService.getVersion"
+    assert record.dedup_key.startswith("repo-demo:NullPointerException:")
+    assert record.related_files == ["src/main/java/DatasetService.java"]
     assert memory_store.saved_records == [record]
 
 
@@ -304,10 +337,13 @@ def test_save_incident_defaults_to_real_incident_memory_backend_and_fails_loud(
     monkeypatch.delenv("LEGACY_PILOT_INCIDENT_MEMORY_BACKEND", raising=False)
     monkeypatch.delenv("LEGACY_PILOT_INCIDENT_MEMORY_DSN", raising=False)
     router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=RecordingIncidentMemoryStoreAdapter(),
         rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
     )
     report = router.generate_rca(router.build_evidence_bundle(router.submit_alert(alert_event())))
     reviewed = router.review_rca(report)
+    router._incident_memory_store_adapter = None
 
     with pytest.raises(ContractViolation) as excinfo:
         router.save_incident(
@@ -323,15 +359,84 @@ def test_save_incident_defaults_to_real_incident_memory_backend_and_fails_loud(
     assert "LEGACY_PILOT_INCIDENT_MEMORY_DSN" in error.message
 
 
-def test_find_similar_incidents_returns_confirmed_mock_match():
-    router = MiddlewareRouter()
+def test_find_similar_incidents_delegates_to_structure4_store():
+    memory_store = RecordingIncidentMemoryStoreAdapter()
+    router = MiddlewareRouter(
+        incident_memory_store_adapter=memory_store,
+    )
     query = router.submit_alert(alert_event())
+    graph_context = TestCodeKnowledgeCoreAdapter().query_graph(
+        GraphQuery(
+            repo_id=query.repo_id,
+            graph_id=query.graph_id or "GRAPH-repo-demo",
+            query_terms=query.query_terms,
+            max_depth=3,
+            trace_id=query.trace_id,
+            contract_version=query.contract_version,
+        )
+    )
+    record = IncidentRecord(
+        incident_id="INC-REAL-MEMORY",
+        repo_id=query.repo_id,
+        module="com.legacy",
+        error_type=query.error_type,
+        symptom="NullPointerException near DatasetService.getVersion",
+        root_cause="datasetId guard missing",
+        fix="add validation",
+        related_files=["src/main/java/com/legacy/DatasetService.java"],
+        related_nodes=["DatasetService.getVersion"],
+        evidence_refs=[graph_context.evidence_refs[0]],
+        confirmed_by_user=True,
+        fix_outcome="verified",
+        dedup_key="repo-demo:NullPointerException:DatasetService.getVersion",
+        retention_policy="demo-30-days",
+        created_at=datetime(2026, 6, 15, tzinfo=UTC),
+        updated_at=datetime(2026, 6, 15, tzinfo=UTC),
+    )
+    memory_store.save_incident(record)
 
     matches = router.find_similar_incidents(query)
 
-    assert matches[0].incident_id == "INC-003"
+    assert matches[0].incident_id == "INC-REAL-MEMORY"
     assert matches[0].confirmed_by_user is True
     assert matches[0].evidence_refs
+
+
+def test_router_loads_incident_through_structure4_store():
+    memory_store = RecordingIncidentMemoryStoreAdapter()
+    router = MiddlewareRouter(incident_memory_store_adapter=memory_store)
+    query = router.submit_alert(alert_event())
+    graph_context = TestCodeKnowledgeCoreAdapter().query_graph(
+        GraphQuery(
+            repo_id=query.repo_id,
+            graph_id=query.graph_id or "GRAPH-repo-demo",
+            query_terms=query.query_terms,
+            max_depth=3,
+            trace_id=query.trace_id,
+            contract_version=query.contract_version,
+        )
+    )
+    record = IncidentRecord(
+        incident_id="INC-REAL-MEMORY",
+        repo_id=query.repo_id,
+        module="com.legacy",
+        error_type=query.error_type,
+        symptom="NullPointerException near DatasetService.getVersion",
+        root_cause="datasetId guard missing",
+        fix="add validation",
+        related_files=["src/main/java/com/legacy/DatasetService.java"],
+        related_nodes=["DatasetService.getVersion"],
+        evidence_refs=[graph_context.evidence_refs[0]],
+        confirmed_by_user=True,
+        fix_outcome="verified",
+        dedup_key="repo-demo:NullPointerException:DatasetService.getVersion",
+        retention_policy="demo-30-days",
+        created_at=datetime(2026, 6, 15, tzinfo=UTC),
+        updated_at=datetime(2026, 6, 15, tzinfo=UTC),
+    )
+    memory_store.save_incident(record)
+
+    assert router.load_incident("INC-REAL-MEMORY") == record
 
 
 def test_router_delegates_structure2_calls_to_incident_context_adapter():
@@ -369,7 +474,10 @@ def test_router_selects_graph_backed_incident_context_adapter(monkeypatch):
 def test_graph_backed_router_builds_bundle_through_middleware_contract(monkeypatch):
     monkeypatch.setenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND", "graph_context")
     code_adapter = RecordingFakeAdapter()
-    router = RecordingGraphContextRouter(code_knowledge_core_adapter=code_adapter)
+    router = RecordingGraphContextRouter(
+        code_knowledge_core_adapter=code_adapter,
+        incident_memory_store_adapter=RecordingIncidentMemoryStoreAdapter(),
+    )
 
     query = router.submit_alert(alert_event())
     bundle = router.build_evidence_bundle(query)
@@ -377,12 +485,11 @@ def test_graph_backed_router_builds_bundle_through_middleware_contract(monkeypat
     assert router.router_query_called is True
     assert code_adapter.query_called is True
     assert bundle.trace_id == query.trace_id
-    assert bundle.similar_incidents[0].incident_id == "INC-003"
-    assert bundle.similar_incidents[0].evidence_refs
+    assert bundle.similar_incidents == []
 
 
 def test_query_graph_returns_traceable_graph_context():
-    router = MiddlewareRouter()
+    router = MiddlewareRouter(code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter())
     query = GraphQuery(
         repo_id="repo-demo",
         graph_id="GRAPH-DEMO",
@@ -413,6 +520,8 @@ def test_query_graph_returns_traceable_graph_context():
 
 def test_review_rca_rejects_report_without_root_cause_evidence():
     router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=RecordingIncidentMemoryStoreAdapter(),
         rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
     )
     valid_report = router.generate_rca(router.build_evidence_bundle(router.submit_alert(alert_event())))
@@ -433,7 +542,10 @@ def test_review_rca_rejects_report_without_root_cause_evidence():
 
 
 def test_generate_rca_rejects_unsupported_bundle_contract_version():
-    router = MiddlewareRouter()
+    router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=RecordingIncidentMemoryStoreAdapter(),
+    )
     bundle = router.build_evidence_bundle(router.submit_alert(alert_event()))
     unsupported_bundle = bundle.model_copy(update={"contract_version": "2.0.0"})
 
@@ -446,6 +558,8 @@ def test_generate_rca_rejects_unsupported_bundle_contract_version():
 
 def test_review_rca_rejects_unsupported_report_contract_version():
     router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=RecordingIncidentMemoryStoreAdapter(),
         rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
     )
     report = router.generate_rca(router.build_evidence_bundle(router.submit_alert(alert_event())))
@@ -460,6 +574,8 @@ def test_review_rca_rejects_unsupported_report_contract_version():
 
 def test_save_incident_requires_user_confirmation():
     router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=RecordingIncidentMemoryStoreAdapter(),
         rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle()
     )
     report = router.generate_rca(router.build_evidence_bundle(router.submit_alert(alert_event())))
@@ -478,20 +594,20 @@ def test_save_incident_requires_user_confirmation():
 
 
 # ---------------------------------------------------------------------------
-# Step 2: default mock preservation + gate-before-adapter
+# Step 2: real default backend + gate-before-adapter
 # ---------------------------------------------------------------------------
 
 
-class TestDefaultRouterPreservesMockBehavior:
-    def test_default_router_uses_mock_adapter_when_backend_is_missing(self, monkeypatch):
+class TestDefaultRouterUsesRealBackends:
+    def test_default_router_uses_gitnexus_adapter_when_backend_is_missing(self, monkeypatch):
         monkeypatch.delenv("LEGACY_PILOT_CODE_CORE_BACKEND", raising=False)
 
         router = MiddlewareRouter()
 
-        assert isinstance(router._code_knowledge_core_adapter, MockCodeKnowledgeCoreAdapter)
+        assert isinstance(router._code_knowledge_core_adapter, GitNexusCliCodeKnowledgeCoreAdapter)
 
-    def test_default_router_index_repo_returns_same_mock_snapshot(self):
-        router = MiddlewareRouter()
+    def test_injected_test_adapter_can_return_deterministic_snapshot(self):
+        router = MiddlewareRouter(code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter())
         request = RepoIndexRequest(
             repo_id="repo-legacy",
             repo_uri="file:///legacy",
@@ -508,8 +624,8 @@ class TestDefaultRouterPreservesMockBehavior:
         assert snapshot.nodes[1].node_id == "NODE-DATASET-SERVICE"
         assert len(snapshot.edges) == 1
 
-    def test_default_router_query_graph_returns_same_mock_context(self):
-        router = MiddlewareRouter()
+    def test_injected_test_adapter_can_return_deterministic_context(self):
+        router = MiddlewareRouter(code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter())
         query = GraphQuery(
             repo_id="repo-legacy",
             graph_id="GRAPH-DEMO",

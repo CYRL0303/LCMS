@@ -33,6 +33,34 @@ class RecordingRunner:
         return self.result
 
 
+class CreatingGitCloneRunner:
+    def __init__(self, results=None):
+        self.results = list(results or [])
+        self.calls = []
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        command = args[0]
+        if command[:4] == ["git", "clone", "--depth", "1"]:
+            destination = Path(command[-1])
+            destination.mkdir(parents=True)
+            (destination / ".git").mkdir()
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="",
+                stderr="",
+            )
+        if self.results:
+            return self.results.pop(0)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="{}",
+            stderr="",
+        )
+
+
 def repo_index_request(**overrides):
     values = {
         "repo_id": "repo-demo",
@@ -367,7 +395,7 @@ def test_non_zero_exit_becomes_recoverable_error_without_leaking_stderr_text():
     assert error.diagnostics["returncode"] == "17"
 
 
-def test_index_repo_rejects_non_local_repo_uri_before_analyze():
+def test_index_repo_rejects_unsupported_remote_repo_uri_before_analyze():
     runner = RecordingRunner()
     client = GitNexusCliClient(runner=runner)
 
@@ -375,10 +403,49 @@ def test_index_repo_rejects_non_local_repo_uri_before_analyze():
         client.index_repo(repo_index_request(repo_uri="https://example.com/repo.git"))
 
     error = excinfo.value
-    assert error.message == "repo_uri must resolve to a local filesystem path."
+    assert error.message == (
+        "Only https://github.com/<owner>/<repo> remote repo_uri values are supported."
+    )
     assert error.recoverable is True
     assert error.diagnostics["repo_uri"] == "https://example.com/repo.git"
     assert runner.calls == []
+
+
+def test_index_repo_imports_github_repo_uri_before_gitnexus_analyze(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_REPO_IMPORT_ROOT", str(tmp_path))
+    runner = CreatingGitCloneRunner(
+        results=[
+            completed_process({}),
+            completed_process(
+                {
+                    "rows": [
+                        {
+                            "n.id": "Class:BookController",
+                            "r.type": "CALLS",
+                            "m.id": "Class:BookService",
+                        }
+                    ]
+                }
+            ),
+        ]
+    )
+    client = GitNexusCliClient(runner=runner)
+
+    payload = client.index_repo(
+        repo_index_request(
+            repo_uri="https://github.com/Lsdaer-1/Intelligent-Book-Management-System"
+        )
+    )
+
+    clone_command = runner.calls[0][0][0]
+    analyze_command = runner.calls[1][0][0]
+    assert clone_command[:4] == ["git", "clone", "--depth", "1"]
+    assert clone_command[-2] == "https://github.com/Lsdaer-1/Intelligent-Book-Management-System.git"
+    assert Path(clone_command[-1]).is_relative_to(tmp_path)
+    assert analyze_command[0:2] == ["gitnexus", "analyze"]
+    assert analyze_command[2] == payload["repo_path"]
+    assert payload["metadata"]["repo_import"]["source"] == "github"
+    assert payload["metadata"]["repo_import"]["imported"] is True
 
 
 def test_index_repo_rejects_missing_repo_path_before_analyze(tmp_path):

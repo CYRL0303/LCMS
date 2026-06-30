@@ -8,10 +8,9 @@ LegacyPilot is a hackathon MVP for incident-driven legacy system analysis. This 
 - Enforces `contract_version`, `trace_id`, `confidence`, and `evidence_refs` gates.
 - Returns a unified `ContractError` envelope for middleware-level failures.
 - Exposes FastAPI routes for the MVP incident analysis flow.
-- Routes the MVP flow through Structure 2 `graph_context`, Structure 3
-  `qwen_api`, and Structure 4 PostgreSQL incident memory by default;
-  deterministic mock backends remain explicit test/demo choices, and
-  Structure 1 can opt in to the real `gitnexus_cli` backend.
+- Routes the MVP flow through real Structure 1 `gitnexus_cli`, Structure 2
+  `graph_context`, Structure 3 `qwen_api`, and Structure 4 PostgreSQL incident
+  memory by default. Runtime mock backend selection is disabled.
 
 Default configured flow:
 
@@ -31,20 +30,18 @@ integration coverage:
 - Structure 1 uses real `gitnexus_cli` indexing/query integration, MyBatis SQL
   extraction, table/config/exception evidence, local graph indexing, and
   optional PostgreSQL graph payload persistence.
-- Structure 1 semantic enrichment remains disabled by default, with explicit
-  deterministic `mock` and opt-in real DashScope Qwen `qwen_api` modes.
+- Structure 1 semantic enrichment remains disabled by default, with opt-in real
+  DashScope Qwen `qwen_api` mode.
 - Structure 2 owns `IncidentContextBuilderAdapter`. Default backend is
   `graph_context`, which builds `EvidenceBundle` from Structure 1
-  `GraphContext`. Unknown backends fail loudly; deterministic `mock` is
-  explicit test/demo mode only.
+  `GraphContext`. Unknown backends fail loudly.
 - Structure 3 owns `RCAReasoningEngineAdapter`. Default backend is real
   DashScope Qwen `qwen_api`; no default mock RCA path remains in middleware.
 - Structure 3 enforces evidence-backed RCA output, rejects unknown evidence
   IDs, retries invalid JSON/schema Qwen responses with bounded repair prompts,
   and records retry metadata without storing secrets.
 - Structure 4 owns PostgreSQL incident memory persistence for confirmed RCA
-  records. Default save backend is real `postgresql`; explicit in-memory mode is
-  test/demo only.
+  records. The production factory only allows the real `postgresql` backend.
 - Middleware routes SubmitAlert -> EvidenceBundle -> RCA generation/review ->
   incident save through Structure2, Structure3, and Structure4 boundaries, converting
   lower-structure failures into `ContractError` envelopes.
@@ -100,6 +97,9 @@ legacy_pilot/
 tests/
   fixtures/
     java_spring_demo/
+frontend/
+  src/                  # React Incident Workbench
+  tests/                # Playwright real frontend E2E
 pyproject.toml
 ```
 
@@ -113,6 +113,13 @@ If editable install is not needed, installing the runtime dependencies is enough
 
 ```bash
 python -m pip install fastapi uvicorn pydantic pytest httpx
+```
+
+Frontend workbench dependencies:
+
+```bash
+cd frontend
+npm install --cache .npm-cache
 ```
 
 ## Run Tests
@@ -161,10 +168,16 @@ GitNexus client controls:
   and `impact` style queries.
 - `GITNEXUS_TIMEOUT_SECONDS`: backward-compatible fallback when the more
   specific timeout variables are not set.
+- `RepoIndexRequest.repo_uri` may be a local path, `file://` URI, or public
+  GitHub repository URL in the form `https://github.com/<owner>/<repo>`. GitHub
+  URLs are cloned with `git clone --depth 1` into
+  `LEGACY_PILOT_REPO_IMPORT_ROOT` before GitNexus analyzes the local checkout.
+- `LEGACY_PILOT_REPO_IMPORT_ROOT`: optional clone cache directory for GitHub
+  imports. Defaults to the OS temp directory under `legacy-pilot-repos`.
+- `LEGACY_PILOT_REPO_IMPORT_TIMEOUT_SECONDS`: timeout for GitHub clone.
 
-Default backend: `mock`.
-Real backend: `gitnexus_cli`.
-There is no silent fallback from `gitnexus_cli` to `mock`; GitNexus runtime failures become recoverable contract errors.
+Default backend: `gitnexus_cli`.
+There is no silent fallback to `mock`; GitNexus runtime failures become recoverable contract errors.
 
 ### Structure 1 Semantic Enrichment
 
@@ -172,13 +185,6 @@ Semantic enrichment is disabled by default.
 
 ```powershell
 $env:LEGACY_PILOT_SEMANTIC_BACKEND='disabled'
-```
-
-The deterministic test backend can be enabled explicitly:
-
-```powershell
-$env:LEGACY_PILOT_SEMANTIC_BACKEND='mock'
-$env:LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP='0.7'
 ```
 
 The real DashScope Qwen backend can be enabled explicitly for opt-in tests:
@@ -230,12 +236,6 @@ Default backend:
 $env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='graph_context'
 ```
 
-Explicit deterministic backend:
-
-```powershell
-$env:LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND='mock'
-```
-
 `graph_context` backend calls `/v1/graph/query` through middleware internals and
 builds `EvidenceBundle` from `GraphContext`. It never connects to Structure 1
 PostgreSQL graph store directly.
@@ -285,15 +285,13 @@ $env:LEGACY_PILOT_INCIDENT_MEMORY_DSN='postgresql://legacy_pilot:legacy_pilot@12
 $env:LEGACY_PILOT_INCIDENT_MEMORY_TABLE='legacy_pilot_incident_records'
 ```
 
-Explicit in-memory backend for tests/demo only:
-
-```powershell
-$env:LEGACY_PILOT_INCIDENT_MEMORY_BACKEND='memory'
-```
-
 `SaveIncident` stores user-confirmed RCA records through Structure 4. PostgreSQL
 rows keep the full `IncidentRecord` JSON plus `incident_id`, `repo_id`, and
 `dedup_key` columns for lookup/upsert.
+`FindSimilarIncidents` and `GET /v1/incidents/{incident_id}` read through the
+same Structure 4 store; the product path no longer returns hardcoded incident
+matches. Missing PostgreSQL DSN fails loudly; there is no in-memory production
+fallback.
 
 ## Run The API
 
@@ -313,6 +311,42 @@ Health check:
 http://127.0.0.1:8000/health
 ```
 
+## Run The Frontend Workbench
+
+The frontend is a React/Vite single-page `Incident Workbench`. It calls only the
+middleware HTTP API through the Vite `/api` proxy; it does not connect directly
+to GitNexus, PostgreSQL, or DashScope.
+
+Start the middleware:
+
+```bash
+python -m uvicorn legacy_pilot.middleware.app:app --host 127.0.0.1 --port 8000
+```
+
+Start the frontend:
+
+```bash
+cd frontend
+npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173
+```
+
+Run the real browser E2E chain:
+
+```powershell
+.\scripts\run-real-frontend-e2e.ps1 -InstallFrontendDeps
+```
+
+That script starts Docker Desktop/PostgreSQL, loads the persisted Qwen key,
+starts middleware, starts the frontend through Playwright, and runs the real
+Structure1 -> PostgreSQL -> Structure2 -> Structure3 Qwen -> Structure4 flow
+from the browser.
+
 ## API Surface
 
 - `GET /health`
@@ -321,16 +355,18 @@ http://127.0.0.1:8000/health
 - `POST /v1/alerts/submit`
 - `POST /v1/evidence-bundles/build`
 - `POST /v1/incidents/similar`
+- `GET /v1/incidents/{incident_id}`
 - `POST /v1/rca/generate`
 - `POST /v1/rca/review`
 - `POST /v1/incidents/save`
 
 ## Current Limits
 
-- Real Structure 1 execution is available only through the opt-in `gitnexus_cli` backend.
+- Real Structure 1 execution uses the `gitnexus_cli` backend.
 - `gitnexus_http` is not implemented.
 - Real Qwen semantic enrichment is available only through the opt-in `qwen_api` backend.
 - Semantic graph output is pending and confidence-capped; it is not treated as a trusted structural fact.
 - Structure 2 defaults to `graph_context`, which requires queryable Structure 1 graph context for useful evidence bundles.
-- Structure 2 deterministic mock responses require explicit `LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND=mock`.
-- Structure 4 in-memory incident storage requires explicit `LEGACY_PILOT_INCIDENT_MEMORY_BACKEND=memory`.
+- GitHub repo import currently supports public `https://github.com/<owner>/<repo>`
+  repository URLs only; branch/tag/commit pinning and private repository tokens
+  are not implemented yet.

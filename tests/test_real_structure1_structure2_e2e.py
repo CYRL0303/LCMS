@@ -10,7 +10,6 @@ from legacy_pilot.code_knowledge_core.errors import CodeKnowledgeCoreError
 from legacy_pilot.code_knowledge_core.gitnexus_client import GitNexusCliClient
 from legacy_pilot.code_knowledge_core.graph_store import PostgresGraphStore
 from legacy_pilot.contracts.models import AlertEvent, GraphQuery, RepoIndexRequest
-from legacy_pilot.incident_memory_store.adapter import PostgresIncidentMemoryStoreAdapter
 from legacy_pilot.middleware.router import MiddlewareRouter
 
 
@@ -101,14 +100,7 @@ def test_real_gitnexus_postgres_structure2_e2e():
         retention_policy="e2e-test",
         contract_version="1.0.0",
     )
-    incident_memory = PostgresIncidentMemoryStoreAdapter(
-        dsn=os.environ["LEGACY_PILOT_INCIDENT_MEMORY_DSN"],
-        table_name=os.getenv(
-            "LEGACY_PILOT_INCIDENT_MEMORY_TABLE",
-            "legacy_pilot_incident_records_e2e",
-        ),
-    )
-    persisted_record = incident_memory.load_incident(record.incident_id)
+    persisted_record = router.load_incident(record.incident_id)
     bundle_evidence_ids = _bundle_evidence_ids(bundle)
     report_evidence_ids = _report_evidence_ids(report)
     reviewed_evidence_ids = _reviewed_evidence_ids(reviewed)

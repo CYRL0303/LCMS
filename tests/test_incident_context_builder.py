@@ -12,7 +12,6 @@ from legacy_pilot.contracts.models import (
 )
 from legacy_pilot.incident_context_builder.adapter import (
     GraphBackedIncidentContextBuilderAdapter,
-    MockIncidentContextBuilderAdapter,
     create_incident_context_builder_adapter,
 )
 from legacy_pilot.incident_context_builder.evidence_builder import (
@@ -136,33 +135,6 @@ def test_parse_alert_event_deduplicates_query_terms_in_order():
     ]
 
 
-def test_mock_incident_context_adapter_preserves_submit_alert_behavior():
-    adapter = MockIncidentContextBuilderAdapter()
-
-    query = adapter.submit_alert(alert_event())
-
-    assert query.trace_id == "TRACE-ALERT-001"
-    assert query.repo_id == "repo-demo"
-    assert query.graph_id == "GRAPH-repo-demo"
-    assert query.error_type == "NullPointerException"
-    assert query.suspected_location == "DatasetService.getVersion"
-    assert query.endpoint == "/api/dataset/version"
-    assert query.contract_version == "1.0.0"
-
-
-def test_mock_incident_context_adapter_builds_evidence_bundle():
-    adapter = MockIncidentContextBuilderAdapter()
-    query = adapter.submit_alert(alert_event())
-
-    bundle = adapter.build_evidence_bundle(query)
-
-    assert bundle.trace_id == query.trace_id
-    assert bundle.contract_version == query.contract_version
-    assert bundle.code_evidence
-    assert bundle.log_evidence
-    assert bundle.similar_incidents[0].incident_id == "INC-003"
-
-
 def test_incident_context_factory_defaults_to_graph_context(monkeypatch):
     monkeypatch.delenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND", raising=False)
 
@@ -200,15 +172,15 @@ def test_incident_context_factory_unknown_backend_fails_loud(monkeypatch):
     message = str(excinfo.value)
     assert "surprise_backend" in message
     assert "graph_context" in message
-    assert "mock" in message
 
 
-def test_incident_context_factory_explicit_mock_still_selects_mock(monkeypatch):
+def test_incident_context_factory_rejects_runtime_mock_backend(monkeypatch):
     monkeypatch.setenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND", "mock")
 
-    adapter = create_incident_context_builder_adapter()
+    with pytest.raises(ValueError) as excinfo:
+        create_incident_context_builder_adapter()
 
-    assert isinstance(adapter, MockIncidentContextBuilderAdapter)
+    assert "Unsupported incident context backend: mock" in str(excinfo.value)
 
 
 def test_build_graph_query_uses_explicit_graph_id():

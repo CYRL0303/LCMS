@@ -11,6 +11,7 @@ PYPROJECT = ROOT / "pyproject.toml"
 GITIGNORE = ROOT / ".gitignore"
 README = ROOT / "README.md"
 REAL_E2E_SCRIPT = ROOT / "scripts" / "run-real-e2e.ps1"
+REAL_FRONTEND_E2E_SCRIPT = ROOT / "scripts" / "run-real-frontend-e2e.ps1"
 QWEN_ENV_SCRIPT = ROOT / "scripts" / "set-qwen-user-env.ps1"
 
 REQUIRED_ENV_KEYS = {
@@ -94,6 +95,15 @@ def test_real_e2e_script_starts_postgres_and_runs_real_chain():
     assert "tests/test_real_structure1_structure2_e2e.py" in script
     assert "sk-" not in script
     assert "*> $null" not in script
+
+
+def test_real_frontend_e2e_script_uses_port_scoped_log_files():
+    script = REAL_FRONTEND_E2E_SCRIPT.read_text(encoding="utf-8")
+
+    assert '"uvicorn.frontend-e2e.$BackendPort.out.log"' in script
+    assert '"uvicorn.frontend-e2e.$BackendPort.err.log"' in script
+    assert '"vite.frontend-e2e.$FrontendPort.out.log"' in script
+    assert '"vite.frontend-e2e.$FrontendPort.err.log"' in script
 
 
 def test_qwen_env_script_persists_user_env_and_optional_local_env_file():

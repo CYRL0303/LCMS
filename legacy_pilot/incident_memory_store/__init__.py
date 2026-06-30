@@ -1,5 +1,4 @@
 from legacy_pilot.incident_memory_store.adapter import (
-    InMemoryIncidentMemoryStoreAdapter,
     IncidentMemoryStoreAdapter,
     IncidentMemoryStoreError,
     PostgresIncidentMemoryStoreAdapter,
@@ -7,7 +6,6 @@ from legacy_pilot.incident_memory_store.adapter import (
 )
 
 __all__ = [
-    "InMemoryIncidentMemoryStoreAdapter",
     "IncidentMemoryStoreAdapter",
     "IncidentMemoryStoreError",
     "PostgresIncidentMemoryStoreAdapter",

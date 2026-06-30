@@ -1,7 +1,6 @@
 from legacy_pilot.incident_context_builder.adapter import (
     GraphBackedIncidentContextBuilderAdapter,
     IncidentContextBuilderAdapter,
-    MockIncidentContextBuilderAdapter,
     create_incident_context_builder_adapter,
 )
 from legacy_pilot.incident_context_builder.evidence_builder import (
@@ -18,7 +17,6 @@ __all__ = [
     "GraphBackedIncidentContextBuilderAdapter",
     "IncidentContextBuilderAdapter",
     "IncidentSignals",
-    "MockIncidentContextBuilderAdapter",
     "build_evidence_bundle_from_graph_context",
     "build_graph_query",
     "create_incident_context_builder_adapter",

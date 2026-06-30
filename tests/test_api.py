@@ -2,11 +2,15 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from legacy_pilot.code_knowledge_core.adapter import CodeKnowledgeCoreAdapter
+from legacy_pilot.code_knowledge_core.adapter import (
+    CodeKnowledgeCoreAdapter,
+)
 from legacy_pilot.contracts.models import (
     GraphContext,
     GraphQuery,
     GraphSnapshot,
+    IncidentMatch,
+    IncidentQuery,
     IncidentRecord,
     RepoIndexRequest,
 )
@@ -14,6 +18,7 @@ from legacy_pilot.incident_memory_store.adapter import IncidentMemoryStoreAdapte
 from legacy_pilot.middleware.app import create_app
 from legacy_pilot.middleware.router import MiddlewareRouter
 from legacy_pilot.rca_reasoning_engine.adapter import QwenApiRCAReasoningEngineAdapter
+from tests.fakes import TestCodeKnowledgeCoreAdapter
 
 
 def alert_payload(
@@ -70,6 +75,29 @@ class ApiMemoryStoreAdapter(IncidentMemoryStoreAdapter):
             if record.incident_id == incident_id:
                 return record
         return None
+
+    def find_similar_incidents(
+        self,
+        query: IncidentQuery,
+        *,
+        limit: int = 5,
+    ) -> list[IncidentMatch]:
+        matches = []
+        for record in self.saved_records:
+            if record.repo_id != query.repo_id or not record.confirmed_by_user:
+                continue
+            matches.append(
+                IncidentMatch(
+                    incident_id=record.incident_id,
+                    similarity=0.91,
+                    previous_root_cause=record.root_cause,
+                    previous_fix=record.fix,
+                    related_files=record.related_files,
+                    evidence_refs=record.evidence_refs,
+                    confirmed_by_user=record.confirmed_by_user,
+                )
+            )
+        return matches[:limit]
 
 
 def qwen_rca_adapter_for_existing_mock_bundle() -> QwenApiRCAReasoningEngineAdapter:
@@ -130,10 +158,13 @@ def test_health_endpoint_exposes_middleware_identity():
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "service": "legacy-pilot-interface-contract-middleware",
-        "contract_version": "1.0.0",
-    }
+    body = response.json()
+    assert body["service"] == "legacy-pilot-interface-contract-middleware"
+    assert body["contract_version"] == "1.0.0"
+    assert body["backends"]["code_knowledge_core"] == "gitnexus_cli"
+    assert body["backends"]["incident_context_builder"] == "graph_context"
+    assert body["backends"]["rca_reasoning_engine"] == "qwen_api"
+    assert body["backends"]["incident_memory_store"] == "postgresql"
 
 
 def test_submit_alert_endpoint_returns_incident_query():
@@ -161,7 +192,10 @@ def test_submit_alert_endpoint_preserves_optional_graph_id():
 
 
 def test_generate_rca_endpoint_converts_unknown_qwen_evidence_id_to_contract_error():
+    memory_store = ApiMemoryStoreAdapter()
     router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=memory_store,
         rca_reasoning_engine_adapter=qwen_rca_adapter_with_unknown_evidence()
     )
     client = TestClient(create_app(router=router))
@@ -181,6 +215,7 @@ def test_generate_rca_endpoint_converts_unknown_qwen_evidence_id_to_contract_err
 def test_http_pipeline_builds_qwen_reviews_and_saves_incident():
     memory_store = ApiMemoryStoreAdapter()
     router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
         rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle(),
         incident_memory_store_adapter=memory_store,
     )
@@ -218,8 +253,38 @@ def test_http_pipeline_builds_qwen_reviews_and_saves_incident():
     assert report_response.json()["contract_version"] == "1.0.0"
 
 
+def test_incident_read_endpoint_loads_saved_record_through_structure4():
+    memory_store = ApiMemoryStoreAdapter()
+    router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        rca_reasoning_engine_adapter=qwen_rca_adapter_for_existing_mock_bundle(),
+        incident_memory_store_adapter=memory_store,
+    )
+    client = TestClient(create_app(router=router))
+    query = client.post("/v1/alerts/submit", json=alert_payload()).json()
+    bundle = client.post("/v1/evidence-bundles/build", json=query).json()
+    report = client.post("/v1/rca/generate", json=bundle).json()
+    reviewed = client.post("/v1/rca/review", json=report).json()
+    saved = client.post(
+        "/v1/incidents/save",
+        json={
+            "reviewed_report": reviewed,
+            "user_confirmation": True,
+            "fix_outcome": "fixed by adding validation",
+            "retention_policy": "demo-30-days",
+            "contract_version": "1.0.0",
+        },
+    ).json()
+
+    response = client.get(f"/v1/incidents/{saved['incident_id']}")
+
+    assert response.status_code == 200
+    assert response.json() == saved
+
+
 def test_query_graph_endpoint_returns_graph_context():
-    client = TestClient(create_app())
+    router = MiddlewareRouter(code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter())
+    client = TestClient(create_app(router=router))
 
     response = client.post(
         "/v1/graph/query",

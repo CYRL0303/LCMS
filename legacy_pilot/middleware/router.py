@@ -1,5 +1,8 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
+from hashlib import sha256
+import os
+import re
 
 from legacy_pilot.code_knowledge_core.adapter import (
     CodeKnowledgeCoreAdapter,
@@ -58,7 +61,6 @@ class MiddlewareRouter:
         self._incident_context_builder_adapter = (
             incident_context_builder_adapter
             or create_incident_context_builder_adapter(
-                now=self._now,
                 query_graph=lambda graph_query: self.query_graph(graph_query),
                 find_similar_incidents=lambda incident_query: self.find_similar_incidents(
                     incident_query
@@ -119,30 +121,33 @@ class MiddlewareRouter:
     def find_similar_incidents(self, query: IncidentQuery) -> list[IncidentMatch]:
         ensure_trace_id(query.trace_id)
         ensure_supported_contract_version(query.contract_version, trace_id=query.trace_id)
-        evidence = self._evidence_ref(
-            evidence_id="EV-INC-003",
-            trace_id=query.trace_id,
-            source_type="incident",
-            source_id="INC-003",
-            excerpt="Previous NPE caused by missing request validation for datasetId.",
-            extraction_method="manual_confirm",
-            confidence=0.9,
-        )
-        return [
-            IncidentMatch(
-                incident_id="INC-003",
-                similarity=0.86,
-                previous_root_cause="missing request validation for datasetId",
-                previous_fix="add @NotNull and service-level null guard",
-                related_files=[
-                    "DatasetController.java",
-                    "DatasetService.java",
-                    "DatasetMapper.xml",
-                ],
-                evidence_refs=[evidence],
-                confirmed_by_user=True,
+        try:
+            return self._incident_memory_store().find_similar_incidents(query)
+        except IncidentMemoryStoreError as exc:
+            raise self._incident_memory_store_error(
+                trace_id=query.trace_id,
+                error=exc,
+            ) from exc
+
+    def load_incident(self, incident_id: str) -> IncidentRecord:
+        try:
+            record = self._incident_memory_store().load_incident(incident_id)
+        except IncidentMemoryStoreError as exc:
+            raise self._incident_memory_store_error(
+                trace_id=None,
+                error=exc,
+            ) from exc
+        if record is None:
+            raise ContractViolation(
+                ContractError(
+                    trace_id=None,
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                    message=f"IncidentRecord not found: {incident_id}",
+                    source_module="incident_memory_store",
+                    recoverable=True,
+                )
             )
-        ]
+        return record
 
     def save_incident(
         self,
@@ -178,24 +183,31 @@ class MiddlewareRouter:
         now = self._now()
         root_cause = reviewed_report.approved_findings[0].summary
         fix = reviewed_report.approved_findings[1].summary if len(reviewed_report.approved_findings) > 1 else ""
+        related_files = _related_files(evidence_refs)
+        related_nodes = _related_nodes(evidence_refs)
+        error_type = _derive_error_type(reviewed_report.approved_findings, evidence_refs)
+        symptom = _derive_symptom(reviewed_report.approved_findings, evidence_refs)
+        module = _derive_module(related_files)
         record = IncidentRecord(
             incident_id=f"INC-{reviewed_report.trace_id.removeprefix('TRACE-')}",
             repo_id=reviewed_report.repo_id,
-            module="dataset-service",
-            error_type="NullPointerException",
-            symptom="NPE in DatasetService.getVersion",
+            module=module,
+            error_type=error_type,
+            symptom=symptom,
             root_cause=root_cause,
             fix=fix,
-            related_files=[
-                "DatasetController.java",
-                "DatasetService.java",
-                "DatasetMapper.xml",
-            ],
-            related_nodes=["DatasetService.getVersion", "DatasetMapper.selectVersionById"],
+            related_files=related_files,
+            related_nodes=related_nodes,
             evidence_refs=evidence_refs,
             confirmed_by_user=True,
             fix_outcome=fix_outcome,
-            dedup_key=f"{reviewed_report.repo_id}:NullPointerException:DatasetService.getVersion",
+            dedup_key=_dedup_key(
+                repo_id=reviewed_report.repo_id,
+                error_type=error_type,
+                related_nodes=related_nodes,
+                related_files=related_files,
+                symptom=symptom,
+            ),
             retention_policy=retention_policy,
             created_at=now,
             updated_at=now,
@@ -207,35 +219,6 @@ class MiddlewareRouter:
                 trace_id=reviewed_report.trace_id,
                 error=exc,
             ) from exc
-
-    def _evidence_ref(
-        self,
-        *,
-        evidence_id: str,
-        trace_id: str,
-        source_type: str,
-        source_id: str,
-        extraction_method: str,
-        confidence: float,
-        file_path: str | None = None,
-        start_line: int | None = None,
-        end_line: int | None = None,
-        excerpt: str | None = None,
-    ) -> EvidenceRef:
-        return EvidenceRef(
-            evidence_id=evidence_id,
-            trace_id=trace_id,
-            source_type=source_type,
-            source_id=source_id,
-            file_path=file_path,
-            start_line=start_line,
-            end_line=end_line,
-            excerpt=excerpt,
-            excerpt_hash=f"mock-{evidence_id.lower()}",
-            extraction_method=extraction_method,
-            confidence=confidence,
-            created_at=self._now(),
-        )
 
     def _evidence_required(self, *, trace_id: str, message: str) -> ContractViolation:
         return ContractViolation(
@@ -302,6 +285,31 @@ class MiddlewareRouter:
             self._incident_memory_store_adapter = create_incident_memory_store_adapter()
         return self._incident_memory_store_adapter
 
+    def runtime_config(self) -> dict[str, str]:
+        return {
+            "code_knowledge_core": _adapter_backend_name(
+                self._code_knowledge_core_adapter,
+                env_key="LEGACY_PILOT_CODE_CORE_BACKEND",
+                default="gitnexus_cli",
+            ),
+            "incident_context_builder": _adapter_backend_name(
+                self._incident_context_builder_adapter,
+                env_key="LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND",
+                default="graph_context",
+            ),
+            "rca_reasoning_engine": _adapter_backend_name(
+                self._rca_reasoning_engine_adapter,
+                env_key="LEGACY_PILOT_RCA_BACKEND",
+                default="qwen_api",
+            ),
+            "incident_memory_store": _adapter_backend_name(
+                self._incident_memory_store_adapter,
+                env_key="LEGACY_PILOT_INCIDENT_MEMORY_BACKEND",
+                default="postgresql",
+                allowed_env_values={"postgresql"},
+            ),
+        }
+
     def _collect_evidence(self, items: list[EvidenceBackedItem]) -> list[EvidenceRef]:
         evidence: list[EvidenceRef] = []
         seen: set[str] = set()
@@ -312,3 +320,160 @@ class MiddlewareRouter:
                 seen.add(ref.evidence_id)
                 evidence.append(ref)
         return evidence
+
+
+_ERROR_TYPE_RE = re.compile(r"\b([A-Za-z_$][\w$]*(?:Exception|Error))\b")
+_JAVA_LOCATION_RE = re.compile(
+    r"\b([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\("
+    r"[^)]*\.java(?::\d+)?\)"
+)
+
+
+def _derive_error_type(
+    findings: list[EvidenceBackedItem],
+    evidence_refs: list[EvidenceRef],
+) -> str:
+    text = _combined_text(findings, evidence_refs)
+    match = _ERROR_TYPE_RE.search(text)
+    if match:
+        return match.group(1)
+    return "UnknownError"
+
+
+def _derive_symptom(
+    findings: list[EvidenceBackedItem],
+    evidence_refs: list[EvidenceRef],
+) -> str:
+    for ref in evidence_refs:
+        if ref.source_type in {"log", "stack_trace"} and ref.excerpt:
+            return _compact(ref.excerpt)
+    if findings:
+        return _compact(findings[0].summary)
+    return "No symptom summary available"
+
+
+def _related_files(evidence_refs: list[EvidenceRef]) -> list[str]:
+    files: list[str] = []
+    seen: set[str] = set()
+    for ref in evidence_refs:
+        if not ref.file_path or ref.file_path in seen:
+            continue
+        seen.add(ref.file_path)
+        files.append(ref.file_path)
+    return files
+
+
+def _related_nodes(evidence_refs: list[EvidenceRef]) -> list[str]:
+    nodes: list[str] = []
+    seen: set[str] = set()
+    for ref in evidence_refs:
+        for node in _nodes_from_evidence(ref):
+            if node in seen:
+                continue
+            seen.add(node)
+            nodes.append(node)
+    return nodes
+
+
+def _nodes_from_evidence(ref: EvidenceRef) -> list[str]:
+    nodes = []
+    if ref.source_id and not _looks_like_file(ref.source_id):
+        nodes.append(ref.source_id)
+    if ref.excerpt:
+        for match in _JAVA_LOCATION_RE.finditer(ref.excerpt):
+            nodes.append(f"{match.group(1)}.{match.group(2)}")
+    return nodes
+
+
+def _derive_module(related_files: list[str]) -> str | None:
+    if not related_files:
+        return None
+    path = related_files[0].replace("\\", "/")
+    if "/src/main/java/" in f"/{path}":
+        java_tail = f"/{path}".split("/src/main/java/", 1)[1]
+        if "/" not in java_tail:
+            return None
+        package_path = java_tail.rsplit("/", 1)[0]
+        return package_path.replace("/", ".") if package_path else None
+    parts = [part for part in path.split("/")[:-1] if part]
+    return ".".join(parts[-2:]) if parts else None
+
+
+def _dedup_key(
+    *,
+    repo_id: str,
+    error_type: str,
+    related_nodes: list[str],
+    related_files: list[str],
+    symptom: str,
+) -> str:
+    location = (
+        related_nodes[0]
+        if related_nodes
+        else related_files[0]
+        if related_files
+        else sha256(symptom.encode("utf-8")).hexdigest()[:12]
+    )
+    return f"{repo_id}:{error_type}:{location}"
+
+
+def _combined_text(
+    findings: list[EvidenceBackedItem],
+    evidence_refs: list[EvidenceRef],
+) -> str:
+    parts = [item.summary for item in findings]
+    parts.extend(ref.excerpt or "" for ref in evidence_refs)
+    parts.extend(ref.source_id or "" for ref in evidence_refs)
+    return "\n".join(parts)
+
+
+def _compact(value: str) -> str:
+    return " ".join(value.split())[:500]
+
+
+def _looks_like_file(value: str) -> bool:
+    leaf = value.rsplit("/", 1)[-1].lower()
+    return leaf.endswith(
+        (
+            ".java",
+            ".xml",
+            ".yml",
+            ".yaml",
+            ".properties",
+            ".sql",
+            ".py",
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".go",
+            ".cs",
+            ".c",
+            ".cpp",
+            ".h",
+        )
+    )
+
+
+def _adapter_backend_name(
+    adapter: object | None,
+    *,
+    env_key: str,
+    default: str,
+    allowed_env_values: set[str] | None = None,
+) -> str:
+    if adapter is None:
+        selected = os.getenv(env_key, default)
+        if allowed_env_values is None or selected.strip().lower() in allowed_env_values:
+            return selected
+        return f"unsupported:{selected}"
+    if backend_name := getattr(adapter, "backend_name", None):
+        return str(backend_name)
+    name = adapter.__class__.__name__
+    normalized = {
+        "GitNexusCliCodeKnowledgeCoreAdapter": "gitnexus_cli",
+        "GraphBackedIncidentContextBuilderAdapter": "graph_context",
+        "QwenApiRCAReasoningEngineAdapter": "qwen_api",
+        "PostgresIncidentMemoryStoreAdapter": "postgresql",
+    }
+    return normalized.get(name, name)

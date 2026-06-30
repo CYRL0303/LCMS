@@ -118,12 +118,27 @@ def test_production_fixture_has_no_semantic_nodes_by_default():
     assert snapshot.semantic_enrichment_version is None
 
 
-def test_production_fixture_has_mock_semantic_nodes_when_explicitly_enabled():
-    from legacy_pilot.code_knowledge_core.semantic import MockSemanticEnricher
+def test_production_fixture_has_qwen_semantic_nodes_when_explicitly_enabled():
+    from legacy_pilot.code_knowledge_core.semantic import QwenApiSemanticEnricher
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Summarizes production fixture method semantics."
+                    }
+                }
+            ]
+        }
 
     adapter = GitNexusCliCodeKnowledgeCoreAdapter(
         client=FakeProductionGitNexusClient(),
-        semantic_enricher=MockSemanticEnricher(confidence_cap=0.55),
+        semantic_enricher=QwenApiSemanticEnricher(
+            api_key="test-key",
+            confidence_cap=0.55,
+            http_post=fake_post,
+        ),
         now=lambda: datetime(2026, 6, 18, tzinfo=UTC),
     )
     snapshot = adapter.index_repo(_production_fixture_request())
@@ -142,10 +157,10 @@ def test_production_fixture_has_mock_semantic_nodes_when_explicitly_enabled():
 
     assert semantic_nodes
     assert semantic_edges
-    assert snapshot.semantic_enrichment_version == "semantic_mock_v1"
+    assert snapshot.semantic_enrichment_version == "qwen_api:qwen-plus"
     assert snapshot.metadata["semantic_enrichment"] == {
-        "backend": "mock",
-        "version": "semantic_mock_v1",
+        "backend": "qwen_api",
+        "version": "qwen_api:qwen-plus",
         "verification_status": "pending",
         "confidence_cap": 0.55,
     }

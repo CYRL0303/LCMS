@@ -1,7 +1,6 @@
 from legacy_pilot.code_knowledge_core.adapter import (
     CodeKnowledgeCoreAdapter,
     GitNexusCliCodeKnowledgeCoreAdapter,
-    MockCodeKnowledgeCoreAdapter,
     UnsupportedCodeKnowledgeCoreBackendAdapter,
     create_code_knowledge_core_adapter,
 )
@@ -20,7 +19,6 @@ from legacy_pilot.code_knowledge_core.graph_store import (
 )
 from legacy_pilot.code_knowledge_core.semantic import (
     DisabledSemanticEnricher,
-    MockSemanticEnricher,
     QwenApiSemanticEnricher,
     SemanticEnricher,
     create_semantic_enricher,
@@ -35,8 +33,6 @@ __all__ = [
     "GraphStore",
     "GraphStoreError",
     "IndexingError",
-    "MockSemanticEnricher",
-    "MockCodeKnowledgeCoreAdapter",
     "PostgresGraphStore",
     "QwenApiSemanticEnricher",
     "QueryError",

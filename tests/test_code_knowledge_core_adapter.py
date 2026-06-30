@@ -6,7 +6,6 @@ import pytest
 from legacy_pilot.code_knowledge_core.adapter import (
     CodeKnowledgeCoreAdapter,
     GitNexusCliCodeKnowledgeCoreAdapter,
-    MockCodeKnowledgeCoreAdapter,
     UnsupportedCodeKnowledgeCoreBackendAdapter,
     create_code_knowledge_core_adapter,
 )
@@ -26,6 +25,7 @@ from legacy_pilot.contracts.models import (
     Node,
     RepoIndexRequest,
 )
+from tests.fakes import TestCodeKnowledgeCoreAdapter
 
 
 PRODUCTION_FIXTURE_ROOT = (
@@ -186,11 +186,11 @@ class TestAdapterInterface:
         assert param_names_query == {"self", "query"}
 
 
-class TestMockAdapterPreservesOriginalBehavior:
+class TestInjectedFakeAdapterPreservesOriginalBehavior:
     """Step 2: mock adapter outputs must match what the router previously returned."""
 
     def test_mock_adapter_index_repo_returns_demo_graph_snapshot(self):
-        adapter = MockCodeKnowledgeCoreAdapter()
+        adapter = TestCodeKnowledgeCoreAdapter()
         request = RepoIndexRequest(
             repo_id="repo-legacy",
             repo_uri="file:///legacy",
@@ -212,7 +212,7 @@ class TestMockAdapterPreservesOriginalBehavior:
         assert snapshot.evidence_refs[0].evidence_id == "EV-REPO-001"
 
     def test_mock_adapter_query_graph_returns_demo_graph_context(self):
-        adapter = MockCodeKnowledgeCoreAdapter()
+        adapter = TestCodeKnowledgeCoreAdapter()
         query = GraphQuery(
             repo_id="repo-legacy",
             graph_id="GRAPH-DEMO",
@@ -718,13 +718,28 @@ def test_gitnexus_adapter_does_not_add_semantic_nodes_by_default(monkeypatch):
     assert snapshot.semantic_enrichment_version is None
 
 
-def test_gitnexus_adapter_adds_mock_semantic_nodes_when_enabled():
-    from legacy_pilot.code_knowledge_core.semantic import MockSemanticEnricher
+def test_gitnexus_adapter_adds_qwen_semantic_nodes_when_enabled():
+    from legacy_pilot.code_knowledge_core.semantic import QwenApiSemanticEnricher
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Reads dataset version through mapper SQL."
+                    }
+                }
+            ]
+        }
 
     adapter = GitNexusCliCodeKnowledgeCoreAdapter(
         client=FakeGitNexusClient(),
         index_enrichers=[],
-        semantic_enricher=MockSemanticEnricher(confidence_cap=0.42),
+        semantic_enricher=QwenApiSemanticEnricher(
+            api_key="test-key",
+            confidence_cap=0.42,
+            http_post=fake_post,
+        ),
         now=lambda: datetime(2026, 6, 18, tzinfo=UTC),
     )
     request = RepoIndexRequest(
@@ -747,13 +762,17 @@ def test_gitnexus_adapter_adds_mock_semantic_nodes_when_enabled():
 
     assert "Function Semantic Summary" in node_types
     assert "HAS_SEMANTIC_ACTION" in edge_types
-    assert snapshot.semantic_enrichment_version == "semantic_mock_v1"
+    assert snapshot.semantic_enrichment_version == "qwen_api:qwen-plus"
     assert snapshot.metadata["semantic_enrichment"] == {
-        "backend": "mock",
-        "version": "semantic_mock_v1",
+        "backend": "qwen_api",
+        "version": "qwen_api:qwen-plus",
         "verification_status": "pending",
         "confidence_cap": 0.42,
     }
+    assert any(
+        "Reads dataset version through mapper SQL." in (evidence.excerpt or "")
+        for evidence in semantic_evidence
+    )
     assert semantic_evidence
     assert all(evidence.extraction_method == "llm" for evidence in semantic_evidence)
     assert all(evidence.confidence <= 0.42 for evidence in semantic_evidence)
@@ -855,19 +874,19 @@ def test_gitnexus_adapter_qwen_env_backend_maps_semantic_graph(monkeypatch):
 
 
 class TestBackendFactory:
-    def test_missing_backend_selects_mock_adapter(self, monkeypatch):
+    def test_missing_backend_selects_real_gitnexus_adapter(self, monkeypatch):
         monkeypatch.delenv("LEGACY_PILOT_CODE_CORE_BACKEND", raising=False)
 
         adapter = create_code_knowledge_core_adapter()
 
-        assert isinstance(adapter, MockCodeKnowledgeCoreAdapter)
+        assert isinstance(adapter, GitNexusCliCodeKnowledgeCoreAdapter)
 
-    def test_mock_backend_selects_mock_adapter(self, monkeypatch):
+    def test_mock_backend_is_not_runtime_selectable(self, monkeypatch):
         monkeypatch.setenv("LEGACY_PILOT_CODE_CORE_BACKEND", "mock")
 
         adapter = create_code_knowledge_core_adapter()
 
-        assert isinstance(adapter, MockCodeKnowledgeCoreAdapter)
+        assert isinstance(adapter, UnsupportedCodeKnowledgeCoreBackendAdapter)
 
     def test_gitnexus_cli_backend_selects_real_adapter_without_running_gitnexus(
         self,

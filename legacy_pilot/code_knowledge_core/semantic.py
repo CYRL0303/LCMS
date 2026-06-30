@@ -11,8 +11,6 @@ SEMANTIC_CONFIDENCE_CAP_ENV = "LEGACY_PILOT_SEMANTIC_CONFIDENCE_CAP"
 SEMANTIC_BASE_URL_ENV = "LEGACY_PILOT_SEMANTIC_BASE_URL"
 SEMANTIC_MODEL_ENV = "LEGACY_PILOT_SEMANTIC_MODEL"
 DASHSCOPE_API_KEY_ENV = "DASHSCOPE_API_KEY"
-MOCK_SEMANTIC_ENRICHMENT_VERSION = "semantic_mock_v1"
-MOCK_PROMPT_VERSION = "mock_semantic_v1"
 QWEN_PROMPT_VERSION = "qwen_semantic_v1"
 DEFAULT_CONFIDENCE_CAP = 0.7
 DEFAULT_QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
@@ -39,72 +37,6 @@ class DisabledSemanticEnricher:
 
     def enrich(self, nodes: list[dict[str, Any]]) -> dict[str, Any]:
         return {"nodes": [], "relationships": []}
-
-
-@dataclass(frozen=True)
-class MockSemanticEnricher:
-    confidence_cap: float = DEFAULT_CONFIDENCE_CAP
-    semantic_enrichment_version: str | None = MOCK_SEMANTIC_ENRICHMENT_VERSION
-    backend_name: str = "mock"
-
-    def enrich(self, nodes: list[dict[str, Any]]) -> dict[str, Any]:
-        semantic_nodes: list[dict[str, Any]] = []
-        relationships: list[dict[str, Any]] = []
-        for node in nodes:
-            if not isinstance(node, dict) or not _is_semantic_candidate(node):
-                continue
-            file_path = _string_value(_get_nested(node, "filePath", "file_path"))
-            if file_path is None:
-                continue
-            node_id = _string_value(_get_nested(node, "id", "node_id", "nodeId"))
-            if node_id is None:
-                continue
-            name = _string_value(_get_nested(node, "name")) or node_id
-            start_line = _int_value(_get_nested(node, "startLine", "start_line"))
-            end_line = _int_value(_get_nested(node, "endLine", "end_line"))
-            summary = f"Mock semantic summary for {name}."
-            semantic_node_id = f"SemanticSummary:{node_id}"
-            semantic_nodes.append(
-                {
-                    "id": semantic_node_id,
-                    "type": SEMANTIC_NODE_TYPE,
-                    "name": f"{name} semantic summary",
-                    "filePath": file_path,
-                    "startLine": start_line,
-                    "endLine": end_line,
-                    "excerpt": summary,
-                    "source_type": SEMANTIC_SOURCE_TYPE,
-                    "extraction_method": "llm",
-                    "confidence": self.confidence_cap,
-                    "properties": {
-                        "source_node_id": node_id,
-                        "summary": summary,
-                        "evidence_span": name,
-                        "prompt_version": MOCK_PROMPT_VERSION,
-                        "verification_status": "pending",
-                    },
-                }
-            )
-            relationships.append(
-                {
-                    "id": f"SEM-REL-{node_id}",
-                    "source_id": node_id,
-                    "target_id": semantic_node_id,
-                    "type": SEMANTIC_EDGE_TYPE,
-                    "filePath": file_path,
-                    "startLine": start_line,
-                    "endLine": end_line,
-                    "excerpt": summary,
-                    "source_type": SEMANTIC_SOURCE_TYPE,
-                    "extraction_method": "llm",
-                    "confidence": self.confidence_cap,
-                    "properties": {
-                        "verification_status": "pending",
-                        "prompt_version": MOCK_PROMPT_VERSION,
-                    },
-                }
-            )
-        return {"nodes": semantic_nodes, "relationships": relationships}
 
 
 @dataclass(frozen=True)
@@ -208,8 +140,6 @@ def create_semantic_enricher(
     cap = _confidence_cap(confidence_cap)
     if selected_backend in {"", "disabled", "none", "off"}:
         return DisabledSemanticEnricher()
-    if selected_backend == "mock":
-        return MockSemanticEnricher(confidence_cap=cap)
     if selected_backend == "qwen_api":
         return QwenApiSemanticEnricher(
             base_url=os.getenv(SEMANTIC_BASE_URL_ENV, DEFAULT_QWEN_BASE_URL),
