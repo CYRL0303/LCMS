@@ -1,5 +1,7 @@
 # LegacyPilot Interface Contract Middleware
 
+[中文 README](README.zh-CN.md)
+
 LegacyPilot is a hackathon MVP for incident-driven legacy system analysis. This repository currently contains the first slice: a Python/FastAPI interface contract middleware that standardizes communication between the four planned LegacyPilot structures.
 
 ## What This Middleware Does
