@@ -391,6 +391,114 @@ The settings modal stores the Qwen API key and GitHub/GitLab tokens in browser
 localStorage. The frontend does not call GitNexus, PostgreSQL, DashScope,
 GitHub, or GitLab directly; it forwards credentials to the middleware headers.
 
+## Dockerized deployment
+
+The production-like Docker path runs the real chain:
+
+```text
+web container
+-> /api reverse proxy
+-> api container
+-> gitnexus_cli mounted at /opt/gitnexus
+-> PostgreSQL graph payload store
+-> graph_context evidence builder
+-> qwen_api RCA generation
+-> PostgreSQL incident memory store
+```
+
+Create a private env file:
+
+```powershell
+Copy-Item .env.prod.example .env.prod
+```
+
+Set these private values in `.env.prod`, or inject them as process env vars
+when running Compose:
+
+```dotenv
+DASHSCOPE_API_KEY=
+GITNEXUS_REPO_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main\gitnexus
+```
+
+`GITNEXUS_REPO_ROOT` must point to a real GitNexus runtime with
+`dist/cli/index.js`. The API container mounts that directory read-only at
+`/opt/gitnexus` and executes it through `/usr/local/bin/gitnexus`. This is a
+real GitNexus CLI path, not a mock.
+
+Run the stack:
+
+```powershell
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+```
+
+Open:
+
+```text
+http://127.0.0.1:8080
+```
+
+Smoke test:
+
+```powershell
+.\scripts\smoke-prod-compose.ps1 -TimeoutSeconds 240
+```
+
+The smoke script fails loudly if `GITNEXUS_REPO_ROOT/dist/cli/index.js` is
+missing. It also verifies the mounted CLI from inside the API container before
+checking same-origin API health through `http://127.0.0.1:8080/api/health`.
+
+Stop while keeping data:
+
+```powershell
+docker compose --env-file .env.prod -f docker-compose.prod.yml down
+```
+
+Delete the local database and repo cache:
+
+```powershell
+docker compose --env-file .env.prod -f docker-compose.prod.yml down -v
+```
+
+### Alibaba Cloud ECS
+
+Fast hackathon deployment:
+
+1. Create an Alibaba Cloud ECS instance with Docker and Docker Compose.
+2. Clone this repository on the ECS instance.
+3. Clone or build GitNexus on the ECS instance at `/opt/legacy-pilot/gitnexus`.
+4. Copy `.env.prod.example` to `.env.prod`.
+5. Set `DASHSCOPE_API_KEY` and `GITNEXUS_REPO_ROOT=/opt/legacy-pilot/gitnexus`.
+6. Run `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build`.
+7. Put Nginx, Caddy, or SLB in front of port `8080` and expose HTTPS only.
+
+For a hackathon demo, the bundled PostgreSQL container can use an ECS cloud disk
+volume. For durable product data, use RDS PostgreSQL and point both
+`LEGACY_PILOT_GRAPH_STORE_DSN` and `LEGACY_PILOT_INCIDENT_MEMORY_DSN` at the RDS
+internal endpoint through a Compose override or ACK Secret.
+
+### Alibaba Cloud product path
+
+Production path:
+
+- Build `legacy-pilot-api` and `legacy-pilot-web` images in CI.
+- Push images to Alibaba Cloud ACR.
+- Run `api` and `web` as ACK Deployments.
+- Use RDS PostgreSQL for graph payloads and incident memory.
+- Use SLB/Ingress for HTTPS.
+- Store `DASHSCOPE_API_KEY`, GitHub/GitLab tokens, and PostgreSQL passwords in
+  Alibaba Cloud Secret Manager or Kubernetes Secrets.
+- Store repo clone cache on NAS/PVC, or keep it ephemeral with a cleanup policy.
+- Send container logs to Alibaba Cloud SLS.
+
+Network rule:
+
+- Public: only HTTPS to `web`.
+- Internal: `web -> api:8000`, `api -> PostgreSQL`.
+- Outbound: DashScope, GitHub, GitLab, and remote Git clone endpoints.
+
+ACR + ACK + RDS is the recommended product deployment shape after the ECS
+Compose demo is stable.
+
 ## API Surface
 
 - `GET /health`
