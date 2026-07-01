@@ -1,0 +1,106 @@
+name: legacy-pilot-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-legacy_pilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-legacy_pilot}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - legacy-pilot-internal
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER:-legacy_pilot} -d $${POSTGRES_DB:-legacy_pilot}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LEGACY_PILOT_CODE_CORE_BACKEND: gitnexus_cli
+      LEGACY_PILOT_GITNEXUS_FORCE_ANALYZE: ${LEGACY_PILOT_GITNEXUS_FORCE_ANALYZE:-1}
+      LEGACY_PILOT_MAX_GRAPH_NODES: ${LEGACY_PILOT_MAX_GRAPH_NODES:-5000}
+      LEGACY_PILOT_MAX_GRAPH_EDGES: ${LEGACY_PILOT_MAX_GRAPH_EDGES:-10000}
+      GITNEXUS_BIN: /usr/local/bin/gitnexus
+      GITNEXUS_REPO_ROOT: /opt/gitnexus
+      GITNEXUS_TIMEOUT_SECONDS: ${GITNEXUS_TIMEOUT_SECONDS:-60}
+      GITNEXUS_INDEX_TIMEOUT_SECONDS: ${GITNEXUS_INDEX_TIMEOUT_SECONDS:-120}
+      GITNEXUS_QUERY_TIMEOUT_SECONDS: ${GITNEXUS_QUERY_TIMEOUT_SECONDS:-30}
+      LEGACY_PILOT_GRAPH_STORE_BACKEND: postgresql
+      LEGACY_PILOT_GRAPH_STORE_DSN: "postgresql://${POSTGRES_USER:-legacy_pilot}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-legacy_pilot}?connect_timeout=5"
+      LEGACY_PILOT_GRAPH_STORE_TABLE: ${LEGACY_PILOT_GRAPH_STORE_TABLE:-legacy_pilot_graph_payloads}
+      LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND: graph_context
+      LEGACY_PILOT_INCIDENT_MEMORY_BACKEND: postgresql
+      LEGACY_PILOT_INCIDENT_MEMORY_DSN: "postgresql://${POSTGRES_USER:-legacy_pilot}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-legacy_pilot}?connect_timeout=5"
+      LEGACY_PILOT_INCIDENT_MEMORY_TABLE: ${LEGACY_PILOT_INCIDENT_MEMORY_TABLE:-legacy_pilot_incident_records}
+      LEGACY_PILOT_RCA_BACKEND: qwen_api
+      LEGACY_PILOT_RCA_BASE_URL: ${LEGACY_PILOT_RCA_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
+      LEGACY_PILOT_RCA_MODEL: ${LEGACY_PILOT_RCA_MODEL:-qwen-plus}
+      LEGACY_PILOT_RCA_CONFIDENCE_CAP: ${LEGACY_PILOT_RCA_CONFIDENCE_CAP:-0.75}
+      LEGACY_PILOT_RCA_REPAIR_ATTEMPTS: ${LEGACY_PILOT_RCA_REPAIR_ATTEMPTS:-2}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?DASHSCOPE_API_KEY is required}
+      LEGACY_PILOT_REPO_IMPORT_ROOT: /var/lib/legacy-pilot/repos
+      LEGACY_PILOT_REPO_IMPORT_TIMEOUT_SECONDS: ${LEGACY_PILOT_REPO_IMPORT_TIMEOUT_SECONDS:-120}
+    volumes:
+      - repo-cache:/var/lib/legacy-pilot/repos
+      - type: bind
+        source: ${GITNEXUS_REPO_ROOT:?GITNEXUS_REPO_ROOT is required}
+        target: /opt/gitnexus
+        read_only: true
+    expose:
+      - "8000"
+    networks:
+      - legacy-pilot-internal
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 12
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    networks:
+      - legacy-pilot-internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 12
+
+volumes:
+  postgres-data:
+  repo-cache:
+
+networks:
+  legacy-pilot-internal:
+    driver: bridge
