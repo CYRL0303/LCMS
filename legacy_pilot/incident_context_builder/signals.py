@@ -9,11 +9,34 @@ JAVA_FRAME_RE = re.compile(
     r"(?P<class>[A-Za-z_$][\w$]*)\.(?P<method>[A-Za-z_$][\w$]*)"
     r"\((?P<file>[^():]+\.java):(?P<line>\d+)\)"
 )
+JAVA_SYMBOL_RE = re.compile(
+    r"\b(?P<class>[A-Z][A-Za-z0-9_$]*)\.(?P<method>[A-Za-z_$][\w$]*)\b"
+)
+JAVA_CLASS_RE = re.compile(
+    r"\b[A-Z][A-Za-z0-9_$]*(?:Controller|Service|Repository|Mapper|DAO|Dao|"
+    r"Client|Handler|Manager|Processor|Exception|Error|Info|Entity|Model|DTO|Dto)\b"
+)
+CAMEL_TOKEN_RE = re.compile(r"\b[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b")
 ENDPOINT_RE = re.compile(r"(?P<endpoint>/api/[A-Za-z0-9_./{}-]+)")
+JAVA_ERROR_TYPE_RE = re.compile(
+    r"\b(?:[a-z_][\w$]*\.)+(?P<error>[A-Z][A-Za-z0-9_$]*(?:Exception|Error))\b"
+)
 SLOW_QUERY_RE = re.compile(r"\bslow\s+query\b", re.IGNORECASE)
 SQL_TABLE_RE = re.compile(
     r"\b(?:from|join|update|into)\s+(?P<table>[A-Za-z_][A-Za-z0-9_]*)\b",
     re.IGNORECASE,
+)
+JAVA_ROLE_SUFFIXES = (
+    "Controller",
+    "Service",
+    "Repository",
+    "Mapper",
+    "DAO",
+    "Dao",
+    "Client",
+    "Handler",
+    "Manager",
+    "Processor",
 )
 
 
@@ -48,7 +71,14 @@ def parse_alert_event(alert: AlertEvent) -> IncidentSignals:
         suspected_location = f"{frame.group('class')}.{frame.group('method')}"
         file_path = frame.group("file")
         line_number = int(frame.group("line"))
-    keywords = _dedupe([value for value in [table] if value])
+    else:
+        symbol = JAVA_SYMBOL_RE.search(text)
+        if symbol:
+            suspected_location = f"{symbol.group('class')}.{symbol.group('method')}"
+    keyword_candidates = [table]
+    if not frame:
+        keyword_candidates.extend(_java_code_terms(text))
+    keywords = _dedupe([value for value in keyword_candidates if value])
     query_terms = _dedupe(
         [
             error_type,
@@ -71,6 +101,9 @@ def parse_alert_event(alert: AlertEvent) -> IncidentSignals:
 def _detect_error_type(text: str) -> str:
     if "NullPointerException" in text:
         return "NullPointerException"
+    java_error = JAVA_ERROR_TYPE_RE.search(text)
+    if java_error:
+        return java_error.group("error")
     if SLOW_QUERY_RE.search(text):
         return "SlowQuery"
     return "UnknownError"
@@ -80,7 +113,48 @@ def _endpoint_match(text: str) -> str | None:
     endpoint = _first_match(ENDPOINT_RE, text, "endpoint")
     if endpoint is None:
         return None
-    return endpoint.rstrip(".,;:!?)\"]}'")
+    endpoint = endpoint.rstrip(".,;:!?)\"]}'")
+    return _normalize_endpoint(endpoint)
+
+
+def _normalize_endpoint(endpoint: str) -> str:
+    parts = endpoint.strip("/").split("/")
+    if len(parts) >= 4 and parts[0] == "api":
+        last = parts[-1]
+        previous = parts[-2]
+        if _looks_like_path_value(last, previous):
+            parts = parts[:-1]
+    return "/" + "/".join(parts)
+
+
+def _looks_like_path_value(value: str, previous: str) -> bool:
+    if value.startswith("{") and value.endswith("}"):
+        return False
+    if value[:1].isupper() or value[:1].isdigit():
+        return True
+    return bool(CAMEL_TOKEN_RE.fullmatch(previous))
+
+
+def _java_code_terms(text: str) -> list[str]:
+    class_terms = [match.group(0) for match in JAVA_CLASS_RE.finditer(text)]
+    symbol_terms = [
+        f"{match.group('class')}.{match.group('method')}"
+        for match in JAVA_SYMBOL_RE.finditer(text)
+    ]
+    method_terms = [match.group("method") for match in JAVA_SYMBOL_RE.finditer(text)]
+    domain_terms = _java_domain_terms(class_terms)
+    camel_terms = [match.group(0) for match in CAMEL_TOKEN_RE.finditer(text)]
+    return _dedupe([*class_terms, *symbol_terms, *method_terms, *domain_terms, *camel_terms])
+
+
+def _java_domain_terms(class_terms: list[str]) -> list[str]:
+    domains: list[str] = []
+    for term in class_terms:
+        for suffix in JAVA_ROLE_SUFFIXES:
+            if term.endswith(suffix) and len(term) > len(suffix):
+                domains.append(term[: -len(suffix)])
+                break
+    return domains
 
 
 def _first_match(pattern: re.Pattern[str], text: str, group_name: str) -> str | None:

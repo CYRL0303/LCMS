@@ -135,6 +135,56 @@ def test_parse_alert_event_deduplicates_query_terms_in_order():
     ]
 
 
+def test_parse_alert_event_extracts_natural_language_code_terms_for_graph_query():
+    signals = parse_alert_event(
+        alert_event(
+            raw_log=(
+                "java.lang.NullPointerException in BookInfoService while handling "
+                "GET /api/books/deleteBook/TestBook. BookInfoController called "
+                "BookInfoRepository and copiesAvailable was null for BookInfo."
+            ),
+            stack_trace=None,
+            error_description=(
+                "Deleting a borrowed book fails in BookInfoService.deleteBook."
+            ),
+        )
+    )
+
+    assert signals.error_type == "NullPointerException"
+    assert signals.endpoint == "/api/books/deleteBook"
+    for term in [
+        "BookInfoService",
+        "BookInfoController",
+        "BookInfoRepository",
+        "BookInfoService.deleteBook",
+        "BookInfo",
+        "deleteBook",
+        "copiesAvailable",
+    ]:
+        assert term in signals.query_terms
+
+    graph_query = build_graph_query(
+        IncidentQuery(
+            trace_id="TRACE-ALERT-BOOK",
+            repo_id="IBM",
+            graph_id="GRAPH-IBM",
+            error_type=signals.error_type,
+            suspected_location=signals.suspected_location,
+            endpoint=signals.endpoint,
+            keywords=signals.keywords,
+            query_terms=signals.query_terms,
+            contract_version="1.0.0",
+        )
+    )
+
+    assert graph_query.query_terms[:2] == [
+        "/api/books/deleteBook",
+        "BookInfoService.deleteBook",
+    ]
+    assert "BookInfoRepository" in graph_query.query_terms
+    assert "copiesAvailable" in graph_query.query_terms
+
+
 def test_incident_context_factory_defaults_to_graph_context(monkeypatch):
     monkeypatch.delenv("LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND", raising=False)
 
@@ -318,3 +368,91 @@ def test_graph_backed_adapter_queries_graph_and_builds_bundle():
     ]
     assert bundle.matched_nodes[0].name == "DatasetService.getVersion"
     assert bundle.code_evidence == [code]
+
+
+def test_graph_backed_adapter_retries_low_recall_and_merges_evidence():
+    calls = []
+    first = evidence_ref("EV-CODE-FIRST", "code", "DatasetService.java")
+    recalled = evidence_ref("EV-CODE-RECALL", "code", "DatasetMapper.java")
+
+    def query_graph(graph_query):
+        calls.append(graph_query)
+        if len(calls) == 1:
+            return GraphContext(
+                trace_id=graph_query.trace_id,
+                matched_nodes=[
+                    Node(
+                        node_id="Method:DatasetService.getVersion",
+                        graph_id=graph_query.graph_id,
+                        repo_id=graph_query.repo_id,
+                        type="Method",
+                        name="DatasetService.getVersion",
+                        evidence_refs=[first],
+                    )
+                ],
+                matched_edges=[],
+                graph_paths=[],
+                evidence_refs=[first],
+                confidence=0.42,
+            )
+        return GraphContext(
+            trace_id=graph_query.trace_id,
+            matched_nodes=[
+                Node(
+                    node_id="Method:DatasetMapper.selectVersionById",
+                    graph_id=graph_query.graph_id,
+                    repo_id=graph_query.repo_id,
+                    type="Method",
+                    name="DatasetMapper.selectVersionById",
+                    evidence_refs=[recalled],
+                )
+            ],
+            matched_edges=[],
+            graph_paths=[
+                [
+                    "DatasetService.getVersion",
+                    "DatasetMapper.selectVersionById",
+                ]
+            ],
+            evidence_refs=[recalled],
+            confidence=0.74,
+        )
+
+    adapter = GraphBackedIncidentContextBuilderAdapter(
+        query_graph=query_graph,
+        find_similar_incidents=lambda query: [],
+    )
+
+    bundle = adapter.build_evidence_bundle(
+        IncidentQuery(
+            trace_id="TRACE-ALERT-001",
+            repo_id="repo-demo",
+            graph_id="GRAPH-repo-demo",
+            error_type="NullPointerException",
+            suspected_location="DatasetService.getVersion",
+            endpoint="/api/dataset/version",
+            keywords=["dataset_version"],
+            query_terms=[
+                "NullPointerException",
+                "DatasetService.getVersion",
+                "DatasetMapper.selectVersionById",
+                "dataset_version",
+            ],
+            contract_version="1.0.0",
+        )
+    )
+
+    assert len(calls) == 2
+    assert calls[1].max_depth > calls[0].max_depth
+    assert "DatasetMapper.selectVersionById" in calls[1].query_terms
+    assert [ref.evidence_id for ref in bundle.code_evidence] == [
+        "EV-CODE-FIRST",
+        "EV-CODE-RECALL",
+    ]
+    assert bundle.graph_paths == [
+        [
+            "DatasetService.getVersion",
+            "DatasetMapper.selectVersionById",
+        ]
+    ]
+    assert bundle.missing_evidence == []

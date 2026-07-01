@@ -22,10 +22,11 @@ test("runs the real four-structure incident pipeline from the workbench", async 
   );
   const repoId = `repo-frontend-e2e-${Date.now()}`;
 
-  await page.addInitScript((storageKey) => {
+  await page.goto("/");
+  await page.evaluate((storageKey) => {
     window.localStorage.removeItem(storageKey);
   }, SETTINGS_STORAGE_KEY);
-  await page.goto("/");
+  await page.reload();
 
   await expect(page.getByText("legacy-pilot-interface-contract-middleware")).toBeVisible({
     timeout: 30_000,

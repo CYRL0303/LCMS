@@ -738,7 +738,10 @@ export function App() {
               <h2 id="results-heading">RCA Result</h2>
             </div>
             <button
+              aria-controls="contract-debug-drawer"
+              aria-expanded={debugOpen}
               className="icon-button secondary"
+              disabled={debugOpen}
               onClick={() => setDebugOpen((open) => !open)}
             >
               <ClipboardList aria-hidden="true" />
@@ -1644,7 +1647,11 @@ function ContractDebugDrawer({
     return null;
   }
   return (
-    <aside className="debug-drawer" aria-label="Contract debug">
+    <aside
+      aria-label="Contract debug"
+      className="debug-drawer"
+      id="contract-debug-drawer"
+    >
       <div className="debug-header">
         <div>
           <p className="eyebrow">Contract</p>

@@ -1,4 +1,5 @@
 import os
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,6 +38,36 @@ DEFAULT_QWEN_MODEL = "qwen-plus"
 DEFAULT_RCA_CONFIDENCE_CAP = 0.75
 DEFAULT_QWEN_REPAIR_ATTEMPTS = 2
 MAX_QWEN_REPAIR_ATTEMPTS = 3
+LOW_RECALL_CONFIDENCE_CAP = 0.5
+LOW_RECALL_MIN_EVIDENCE_REFS = 2
+EVIDENCE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_$]*")
+CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+COMMON_EVIDENCE_TOKENS = {
+    "and",
+    "before",
+    "calls",
+    "code",
+    "coverage",
+    "evidence",
+    "flow",
+    "from",
+    "guard",
+    "into",
+    "java",
+    "line",
+    "method",
+    "near",
+    "need",
+    "needs",
+    "null",
+    "path",
+    "regression",
+    "source",
+    "the",
+    "uses",
+    "with",
+    "without",
+}
 
 
 class RCAReasoningEngineAdapter(ABC):
@@ -236,6 +267,7 @@ def create_rca_reasoning_engine_adapter(
 
 
 def _qwen_rca_prompt(bundle: EvidenceBundle, evidence: list[EvidenceRef]) -> str:
+    quality = _evidence_quality(bundle, evidence)
     evidence_lines = [
         (
             f"- {ref.evidence_id}: source_type={ref.source_type}; "
@@ -252,11 +284,14 @@ def _qwen_rca_prompt(bundle: EvidenceBundle, evidence: list[EvidenceRef]) -> str
         f"suspected_location: {bundle.incident_query.suspected_location}\n"
         f"graph_paths: {bundle.graph_paths}\n"
         f"missing_evidence: {bundle.missing_evidence}\n"
+        f"evidence_quality: {quality.label}\n"
+        f"evidence_quality_reasons: {quality.reasons}\n"
         "Evidence IDs:\n"
         + "\n".join(evidence_lines)
         + "\nReturn JSON with keys hypotheses, selected_root_cause, suggested_fix, "
         "migration_impact, migration_checklist, affected_path, open_questions, confidence. "
-        "Each conclusion object must contain summary, evidence_ids, confidence."
+        "Each conclusion object must contain summary, evidence_ids, confidence. "
+        + _quality_prompt_rules(quality)
     )
 
 
@@ -284,7 +319,9 @@ def _qwen_repair_prompt(
         + "\nReturn only corrected JSON. "
         "hypotheses and suggested_fix must be arrays of objects. "
         "selected_root_cause and migration_impact must be objects. "
-        "Every conclusion object must include summary, evidence_ids, and confidence."
+        "Every conclusion object must include summary, evidence_ids, and confidence. "
+        "If evidence_ids were omitted or invented, choose the closest matching "
+        "IDs from the supplied Evidence IDs list and do not invent new IDs."
     )
 
 
@@ -295,22 +332,25 @@ def _report_from_qwen_payload(
     evidence_lookup: dict[str, EvidenceRef],
     confidence_cap: float,
 ) -> RCAReport:
+    evidence_candidates = list(evidence_lookup.values())
     hypotheses = [
-        _item_from_qwen(raw, evidence_lookup, "hypotheses")
+        _item_from_qwen(raw, evidence_lookup, evidence_candidates, "hypotheses")
         for raw in payload.get("hypotheses", [])
     ]
     selected_root_cause = _item_from_qwen(
         payload.get("selected_root_cause"),
         evidence_lookup,
+        evidence_candidates,
         "selected_root_cause",
     )
     suggested_fix = [
-        _item_from_qwen(raw, evidence_lookup, "suggested_fix")
+        _item_from_qwen(raw, evidence_lookup, evidence_candidates, "suggested_fix")
         for raw in payload.get("suggested_fix", [])
     ]
     migration_impact = _item_from_qwen(
         payload.get("migration_impact"),
         evidence_lookup,
+        evidence_candidates,
         "migration_impact",
     )
     evidence_chain = _dedupe_evidence(
@@ -344,29 +384,189 @@ def _report_from_qwen_payload(
         open_questions=[str(value) for value in payload.get("open_questions", [])],
     )
     assert_report_is_evidence_backed(report)
+    _assert_report_respects_evidence_quality(bundle, evidence_candidates, report)
     return report
 
 
 def _item_from_qwen(
     raw: Any,
     evidence_lookup: dict[str, EvidenceRef],
+    evidence_candidates: list[EvidenceRef],
     field_name: str,
 ) -> EvidenceBackedItem:
     if not isinstance(raw, dict):
         raise RCAGenerationError(f"{field_name} must be an object.")
     evidence_ids = raw.get("evidence_ids")
-    if not isinstance(evidence_ids, list) or not evidence_ids:
-        raise RCAGenerationError(f"{field_name} must include evidence_ids.")
-    unknown = [str(eid) for eid in evidence_ids if str(eid) not in evidence_lookup]
-    if unknown:
+    valid_ids: list[str] = []
+    unknown: list[str] = []
+    if isinstance(evidence_ids, list):
+        for evidence_id in evidence_ids:
+            key = str(evidence_id)
+            if key in evidence_lookup:
+                valid_ids.append(key)
+            else:
+                unknown.append(key)
+    if not valid_ids:
+        matched_refs = _match_evidence_refs_to_summary(raw, evidence_candidates)
+        if matched_refs:
+            valid_ids = [ref.evidence_id for ref in matched_refs]
+        elif unknown:
+            raise RCAGenerationError(
+                f"{field_name} referenced unknown evidence_ids: "
+                f"{', '.join(unknown)} and could not map summary to supplied evidence."
+            )
+        else:
+            raise RCAGenerationError(
+                f"{field_name} must include evidence_ids or match supplied evidence."
+            )
+    if unknown and valid_ids:
+        matched_refs = _match_evidence_refs_to_summary(raw, evidence_candidates)
+        if matched_refs:
+            valid_ids = [ref.evidence_id for ref in matched_refs]
+    refs = _dedupe_evidence([evidence_lookup[evidence_id] for evidence_id in valid_ids])
+    if not refs:
         raise RCAGenerationError(
-            f"{field_name} referenced unknown evidence_ids: {', '.join(unknown)}"
+            f"{field_name} must include evidence_ids or match supplied evidence."
         )
     return EvidenceBackedItem(
         summary=str(raw.get("summary", "")).strip(),
-        evidence_refs=[evidence_lookup[str(eid)] for eid in evidence_ids],
+        evidence_refs=refs,
         confidence=min(float(raw.get("confidence", 0.0)), 1.0),
     )
+
+
+def _match_evidence_refs_to_summary(
+    raw: dict[str, Any],
+    evidence_candidates: list[EvidenceRef],
+) -> list[EvidenceRef]:
+    summary = str(raw.get("summary", "")).strip()
+    query_tokens = _evidence_match_tokens(summary)
+    if not query_tokens:
+        return []
+    scored = [
+        (score, index, ref)
+        for index, ref in enumerate(evidence_candidates)
+        if (score := _evidence_match_score(query_tokens, ref)) > 0
+    ]
+    if not scored:
+        return []
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    best_score = scored[0][0]
+    return [ref for score, _, ref in scored if score == best_score][:3]
+
+
+def _evidence_match_score(query_tokens: set[str], ref: EvidenceRef) -> int:
+    evidence_tokens = _evidence_match_tokens(
+        " ".join(
+            str(value)
+            for value in [
+                ref.evidence_id,
+                ref.source_type,
+                ref.source_id,
+                ref.file_path,
+                ref.excerpt,
+            ]
+            if value is not None
+        )
+    )
+    overlap = query_tokens & evidence_tokens
+    if not overlap:
+        return 0
+    return len(overlap) + sum(2 for token in overlap if len(token) >= 6)
+
+
+def _evidence_match_tokens(text: str) -> set[str]:
+    tokens: set[str] = set()
+    for raw_token in EVIDENCE_TOKEN_RE.findall(text):
+        candidates = [raw_token, *CAMEL_BOUNDARY_RE.split(raw_token)]
+        for candidate in candidates:
+            token = candidate.lower().strip("_$")
+            if len(token) <= 2 or token in COMMON_EVIDENCE_TOKENS:
+                continue
+            tokens.add(token)
+    return tokens
+
+
+@dataclass(frozen=True)
+class EvidenceQuality:
+    constrained: bool
+    reasons: list[str]
+
+    @property
+    def label(self) -> str:
+        return "constrained" if self.constrained else "sufficient"
+
+
+def _evidence_quality(
+    bundle: EvidenceBundle,
+    evidence: list[EvidenceRef],
+) -> EvidenceQuality:
+    reasons: list[str] = []
+    if bundle.missing_evidence:
+        reasons.append("missing_evidence=" + ",".join(bundle.missing_evidence))
+    if _has_graph_context(bundle) and len(evidence) < LOW_RECALL_MIN_EVIDENCE_REFS:
+        reasons.append(f"low-recall evidence_refs={len(evidence)}")
+    return EvidenceQuality(constrained=bool(reasons), reasons=reasons)
+
+
+def _has_graph_context(bundle: EvidenceBundle) -> bool:
+    return bool(bundle.matched_nodes or bundle.graph_paths)
+
+
+def _quality_prompt_rules(quality: EvidenceQuality) -> str:
+    if not quality.constrained:
+        return ""
+    return (
+        "Evidence quality: constrained. For missing_evidence or low-recall evidence, "
+        "you must not present a high-confidence root cause. "
+        f"Set report confidence and selected_root_cause confidence <= {LOW_RECALL_CONFIDENCE_CAP}. "
+        "Add open_questions naming missing evidence. "
+        "Do not use missing evidence, absent files, or lack of evidence as proof of root cause."
+    )
+
+
+def _assert_report_respects_evidence_quality(
+    bundle: EvidenceBundle,
+    evidence: list[EvidenceRef],
+    report: RCAReport,
+) -> None:
+    quality = _evidence_quality(bundle, evidence)
+    if not quality.constrained:
+        return
+    if report.confidence > LOW_RECALL_CONFIDENCE_CAP:
+        raise RCAGenerationError(
+            "low-recall evidence requires report confidence <= "
+            f"{LOW_RECALL_CONFIDENCE_CAP}."
+        )
+    if _confidence(report.selected_root_cause) > LOW_RECALL_CONFIDENCE_CAP:
+        raise RCAGenerationError(
+            "low-recall evidence requires selected_root_cause confidence <= "
+            f"{LOW_RECALL_CONFIDENCE_CAP}."
+        )
+    if not report.open_questions:
+        raise RCAGenerationError(
+            "low-recall evidence requires open_questions naming missing evidence."
+        )
+    if _uses_missing_evidence_as_cause(report.selected_root_cause.summary):
+        raise RCAGenerationError(
+            "missing evidence cannot be used as proof of root cause."
+        )
+
+
+def _confidence(item: EvidenceBackedItem) -> float:
+    return float(item.confidence if item.confidence is not None else 0.0)
+
+
+def _uses_missing_evidence_as_cause(summary: str) -> bool:
+    normalized = " ".join(summary.lower().split())
+    markers = [
+        "absence of evidence",
+        "lack of evidence",
+        "missing evidence",
+        "no evidence",
+        "not found in evidence",
+    ]
+    return any(marker in normalized for marker in markers)
 
 
 def _chat_completion_content(response: dict[str, Any]) -> str:

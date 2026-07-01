@@ -20,6 +20,8 @@ from legacy_pilot.incident_context_builder.signals import parse_alert_event
 INCIDENT_CONTEXT_BACKEND_ENV = "LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND"
 DEFAULT_INCIDENT_CONTEXT_BACKEND = "graph_context"
 ALLOWED_INCIDENT_CONTEXT_BACKENDS = ("graph_context",)
+MIN_RECALL_EVIDENCE_REFS = 2
+RECALL_MAX_DEPTH = 6
 
 
 class IncidentContextBuilderAdapter(ABC):
@@ -57,7 +59,13 @@ class GraphBackedIncidentContextBuilderAdapter(IncidentContextBuilderAdapter):
         )
 
     def build_evidence_bundle(self, query: IncidentQuery) -> EvidenceBundle:
-        graph_context = self._query_graph(build_graph_query(query))
+        graph_query = build_graph_query(query)
+        graph_context = self._query_graph(graph_query)
+        if _needs_recall_retry(graph_context):
+            graph_context = _merge_graph_contexts(
+                graph_context,
+                self._query_graph(_recall_graph_query(query, graph_query)),
+            )
         return build_evidence_bundle_from_graph_context(
             query=query,
             graph_context=graph_context,
@@ -92,3 +100,80 @@ def create_incident_context_builder_adapter(
         f"Unsupported incident context backend: {selected_backend}. "
         f"Allowed values: {allowed}."
     )
+
+
+def _needs_recall_retry(graph_context: GraphContext) -> bool:
+    return (
+        not graph_context.graph_paths
+        or not graph_context.evidence_refs
+        or len(graph_context.evidence_refs) < MIN_RECALL_EVIDENCE_REFS
+    )
+
+
+def _recall_graph_query(query: IncidentQuery, base_query: GraphQuery) -> GraphQuery:
+    recall_terms = _dedupe(
+        [
+            *base_query.query_terms,
+            *query.query_terms,
+            *query.keywords,
+            query.suspected_location,
+            query.endpoint,
+            query.error_type,
+        ]
+    )
+    return base_query.model_copy(
+        update={
+            "query_terms": recall_terms,
+            "max_depth": max(base_query.max_depth, RECALL_MAX_DEPTH),
+        }
+    )
+
+
+def _merge_graph_contexts(primary: GraphContext, recalled: GraphContext) -> GraphContext:
+    return GraphContext(
+        trace_id=primary.trace_id,
+        matched_nodes=_dedupe_by(primary.matched_nodes, recalled.matched_nodes, "node_id"),
+        matched_edges=_dedupe_by(primary.matched_edges, recalled.matched_edges, "edge_id"),
+        graph_paths=_dedupe_paths([*primary.graph_paths, *recalled.graph_paths]),
+        evidence_refs=_dedupe_by(
+            primary.evidence_refs,
+            recalled.evidence_refs,
+            "evidence_id",
+        ),
+        confidence=max(primary.confidence, recalled.confidence),
+    )
+
+
+def _dedupe_by(first: list, second: list, attr: str) -> list:
+    output = []
+    seen: set[str] = set()
+    for item in [*first, *second]:
+        key = str(getattr(item, attr))
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(item)
+    return output
+
+
+def _dedupe_paths(paths: list[list[str]]) -> list[list[str]]:
+    output: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for path in paths:
+        key = tuple(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(path)
+    return output
+
+
+def _dedupe(values: list[str | None]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output

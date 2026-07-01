@@ -234,6 +234,154 @@ def test_qwen_adapter_maps_real_api_shape_to_evidence_backed_report():
     assert report.confidence == 0.5
 
 
+def test_qwen_adapter_maps_missing_evidence_ids_to_matching_bundle_evidence():
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"hypotheses":[{"summary":"BookInfoService deleteBook '
+                            'dereferences copiesAvailable before BookInfoRepository access",'
+                            '"confidence":0.81}],'
+                            '"selected_root_cause":{"summary":"BookInfoService.deleteBook '
+                            'uses copiesAvailable without a null guard",'
+                            '"confidence":0.82},'
+                            '"suggested_fix":[{"summary":"Guard copiesAvailable in '
+                            'BookInfoService.deleteBook before repository mutation",'
+                            '"confidence":0.78}],'
+                            '"migration_impact":{"summary":"BookInfoController delete flow '
+                            'and BookInfoRepository need regression coverage",'
+                            '"confidence":0.7},'
+                            '"migration_checklist":["add deleteBook null regression"],'
+                            '"affected_path":["BookInfoService.deleteBook"],'
+                            '"open_questions":[],"confidence":0.82}'
+                        )
+                    }
+                }
+            ]
+        }
+
+    evidence = evidence_ref(
+        "EV-BOOK-SVC",
+        "code",
+        source_id="Method:BookInfoService.deleteBook",
+        file_path="src/main/java/com/example/demo/service/BookInfoService.java",
+        excerpt=(
+            "BookInfoService.deleteBook calls BookInfoRepository and reads "
+            "copiesAvailable from BookInfo."
+        ),
+    )
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+    )
+
+    report = adapter.generate_rca(
+        evidence_bundle(
+            alert_summary="NullPointerException near BookInfoService.deleteBook",
+            incident_query=book_incident_query(),
+            code_evidence=[evidence],
+        )
+    )
+
+    assert [ref.evidence_id for ref in report.evidence_chain] == ["EV-BOOK-SVC"]
+    assert [
+        ref.evidence_id for ref in report.selected_root_cause.evidence_refs
+    ] == ["EV-BOOK-SVC"]
+
+
+def test_qwen_adapter_replaces_unknown_evidence_ids_with_matching_bundle_evidence():
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"hypotheses":[{"summary":"BookInfoService deleteBook '
+                            'dereferences copiesAvailable",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.81}],'
+                            '"selected_root_cause":{"summary":"BookInfoService.deleteBook '
+                            'uses copiesAvailable without a null guard",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.82},'
+                            '"suggested_fix":[{"summary":"Guard copiesAvailable in '
+                            'BookInfoService.deleteBook",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.78}],'
+                            '"migration_impact":{"summary":"BookInfoController delete flow '
+                            'needs regression coverage",'
+                            '"evidence_ids":["EV-UNKNOWN"],"confidence":0.7},'
+                            '"migration_checklist":["add deleteBook null regression"],'
+                            '"affected_path":["BookInfoService.deleteBook"],'
+                            '"open_questions":[],"confidence":0.82}'
+                        )
+                    }
+                }
+            ]
+        }
+
+    evidence = evidence_ref(
+        "EV-BOOK-SVC",
+        "code",
+        source_id="Method:BookInfoService.deleteBook",
+        file_path="src/main/java/com/example/demo/service/BookInfoService.java",
+        excerpt="BookInfoService.deleteBook reads copiesAvailable from BookInfo.",
+    )
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+    )
+
+    report = adapter.generate_rca(
+        evidence_bundle(
+            alert_summary="NullPointerException near BookInfoService.deleteBook",
+            incident_query=book_incident_query(),
+            code_evidence=[evidence],
+        )
+    )
+
+    assert [
+        ref.evidence_id for ref in report.selected_root_cause.evidence_refs
+    ] == ["EV-BOOK-SVC"]
+
+
+def test_qwen_adapter_repairs_strong_rca_when_evidence_quality_is_low():
+    requests = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append(body)
+        if len(requests) == 1:
+            content = valid_qwen_content(confidence="0.9")
+        else:
+            content = valid_qwen_content(
+                confidence="0.45",
+                item_confidence="0.45",
+                open_questions='"Need graph_paths before confirming root cause."',
+            )
+        return {"choices": [{"message": {"content": content}}]}
+
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+    )
+
+    report = adapter.generate_rca(
+        evidence_bundle(
+            code_evidence=[evidence_ref("EV-CODE-1", "code")],
+            missing_evidence=["graph_paths"],
+        )
+    )
+
+    assert len(requests) == 2
+    first_prompt = requests[0]["messages"][1]["content"]
+    repair_prompt = requests[1]["messages"][1]["content"]
+    assert "Evidence quality: constrained" in first_prompt
+    assert "must not present a high-confidence root cause" in first_prompt
+    assert "low-recall evidence" in repair_prompt
+    assert report.confidence == 0.45
+    assert report.selected_root_cause.confidence == 0.45
+    assert report.open_questions == ["Need graph_paths before confirming root cause."]
+
+
 def test_qwen_adapter_uses_request_scoped_api_key(monkeypatch):
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     requests = []
@@ -513,45 +661,59 @@ def valid_qwen_content(
     suggested_fix: str | None = None,
     migration_impact: str | None = None,
     confidence: str = "0.7",
+    item_confidence: str = "0.7",
+    open_questions: str | None = None,
 ) -> str:
     suggested_fix = suggested_fix or (
         '[{"summary":"add validation",'
-        '"evidence_ids":["EV-CODE-1"],"confidence":0.7}]'
+        f'"evidence_ids":["EV-CODE-1"],"confidence":{item_confidence}}}]'
     )
     migration_impact = migration_impact or (
         '{"summary":"endpoint needs regression",'
-        '"evidence_ids":["EV-CODE-1"],"confidence":0.6}'
+        f'"evidence_ids":["EV-CODE-1"],"confidence":{item_confidence}}}'
     )
+    open_questions = open_questions or ""
     return (
         '{"hypotheses":[{"summary":"datasetId guard missing",'
-        '"evidence_ids":["EV-CODE-1"],"confidence":0.7}],'
+        f'"evidence_ids":["EV-CODE-1"],"confidence":{item_confidence}}}],'
         '"selected_root_cause":{"summary":"datasetId guard missing",'
-        '"evidence_ids":["EV-CODE-1"],"confidence":0.7},'
+        f'"evidence_ids":["EV-CODE-1"],"confidence":{item_confidence}}},'
         '"suggested_fix":'
         + suggested_fix
         + ',"migration_impact":'
         + migration_impact
         + ',"migration_checklist":["add regression"],'
-        '"affected_path":[],"open_questions":[],"confidence":'
+        '"affected_path":[],"open_questions":['
+        + open_questions
+        + '],"confidence":'
         + confidence
         + "}"
     )
 
 
-def evidence_ref(evidence_id: str, source_type: str) -> EvidenceRef:
+def evidence_ref(
+    evidence_id: str,
+    source_type: str,
+    *,
+    source_id: str | None = None,
+    file_path: str | None = None,
+    excerpt: str | None = None,
+) -> EvidenceRef:
     return EvidenceRef(
         evidence_id=evidence_id,
         trace_id="TRACE-STRUCTURE3-001",
         source_type=source_type,
-        source_id=evidence_id,
-        file_path=(
+        source_id=source_id or evidence_id,
+        file_path=file_path
+        if file_path is not None
+        else (
             "src/main/java/com/legacy/DatasetService.java"
             if source_type == "code"
             else None
         ),
         start_line=40 if source_type == "code" else None,
         end_line=45 if source_type == "code" else None,
-        excerpt=f"{source_type} evidence",
+        excerpt=excerpt or f"{source_type} evidence",
         excerpt_hash=f"hash-{evidence_id}",
         extraction_method="java_parser" if source_type == "code" else "regex",
         confidence=0.9,
@@ -567,6 +729,24 @@ def incident_query() -> IncidentQuery:
         error_type="NullPointerException",
         suspected_location="DatasetService.getVersion",
         query_terms=["NullPointerException", "DatasetService.getVersion"],
+        contract_version="1.0.0",
+    )
+
+
+def book_incident_query() -> IncidentQuery:
+    return IncidentQuery(
+        trace_id="TRACE-STRUCTURE3-BOOK",
+        repo_id="IBM",
+        graph_id="GRAPH-IBM",
+        error_type="NullPointerException",
+        suspected_location="BookInfoService.deleteBook",
+        endpoint="/api/books/deleteBook",
+        query_terms=[
+            "NullPointerException",
+            "BookInfoService.deleteBook",
+            "BookInfoRepository",
+            "copiesAvailable",
+        ],
         contract_version="1.0.0",
     )
 
