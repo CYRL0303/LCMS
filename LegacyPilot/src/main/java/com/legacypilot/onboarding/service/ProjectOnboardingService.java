@@ -1,5 +1,6 @@
 package com.legacypilot.onboarding.service;
 
+import com.legacypilot.agent.service.AgentContextStore;
 import com.legacypilot.codeanalysis.service.RepositoryCodeAnalysisService;
 import com.legacypilot.onboarding.dto.ConnectLocalProjectRequest;
 import com.legacypilot.onboarding.dto.ConnectLocalProjectResponse;
@@ -25,15 +26,18 @@ public class ProjectOnboardingService {
     private final ProjectService projectService;
     private final RepositoryService repositoryService;
     private final RepositoryCodeAnalysisService repositoryCodeAnalysisService;
+    private final AgentContextStore agentContextStore;
 
     public ProjectOnboardingService(
             ProjectService projectService,
             RepositoryService repositoryService,
-            RepositoryCodeAnalysisService repositoryCodeAnalysisService
+            RepositoryCodeAnalysisService repositoryCodeAnalysisService,
+            AgentContextStore agentContextStore
     ) {
         this.projectService = projectService;
         this.repositoryService = repositoryService;
         this.repositoryCodeAnalysisService = repositoryCodeAnalysisService;
+        this.agentContextStore = agentContextStore;
     }
 
     /**
@@ -58,6 +62,7 @@ public class ProjectOnboardingService {
         );
         RepositoryFilesResponse files = repositoryService.listRepositoryFiles(repository.repoId());
         RepositoryGraphAnalysisResponse graph = repositoryCodeAnalysisService.analyzeRepository(repository.repoId());
+        agentContextStore.setCurrentRepoId(repository.repoId());
 
         return new ConnectLocalProjectResponse(
                 project,
