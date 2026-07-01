@@ -139,7 +139,15 @@ def test_prod_compose_defines_real_web_api_postgres_stack():
 def test_prod_compose_smoke_script_checks_same_origin_api_health():
     script = (ROOT / "scripts" / "smoke-prod-compose.ps1").read_text(encoding="utf-8")
 
+    assert "Read-EnvFile" in script
+    assert "Get-EnvValue" in script
+    assert "GetEnvironmentVariable($Key, \"Process\")" in script
+    assert "GITNEXUS_REPO_ROOT" in script
+    assert "dist/cli/index.js" in script
+    assert "Test-GitNexusRuntime" in script
     assert "docker compose --env-file $EnvFile -f $ComposeFile up -d --build" in script
+    assert "docker compose --env-file $EnvFile -f $ComposeFile exec -T api test -f /opt/gitnexus/dist/cli/index.js" in script
+    assert "docker compose --env-file $EnvFile -f $ComposeFile exec -T api node /opt/gitnexus/dist/cli/index.js --help" in script
     assert "http://127.0.0.1:8080/api/health" in script
     assert "docker compose --env-file $EnvFile -f $ComposeFile logs --tail 120 web" in script
     assert "docker compose --env-file $EnvFile -f $ComposeFile logs --tail 120 api" in script
