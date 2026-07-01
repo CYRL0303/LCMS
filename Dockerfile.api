@@ -1,18 +1,63 @@
-FROM python:3.13-slim
+# syntax=docker/dockerfile:1.7
+
+FROM node:22-bookworm-slim AS node-runtime
+
+FROM node:22-bookworm-slim AS gitnexus-build
+
+ARG GITNEXUS_PACKAGE_DIR=gitnexus
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        g++ \
+        git \
+        make \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/gitnexus-source
+COPY --from=gitnexus_source . .
+
+RUN if [ -f gitnexus-shared/package.json ]; then \
+        cd gitnexus-shared \
+        && rm -rf node_modules dist \
+        && npm ci; \
+    fi
+
+WORKDIR /opt/gitnexus-source/${GITNEXUS_PACKAGE_DIR}
+RUN test -f package.json \
+    && rm -rf node_modules dist \
+    && npm pkg delete scripts.prepare \
+    && npm ci \
+    && npm run build \
+    && test -f dist/cli/index.js \
+    && node -e "const fs=require('fs'), path=require('path'); function find(dir){ for (const entry of fs.readdirSync(dir,{withFileTypes:true})) { const full=path.join(dir,entry.name); if (entry.isFile() && entry.name==='lbugjs.node') return full; if (entry.isDirectory()) { const found=find(full); if (found) return found; } } } const p=find('node_modules/@ladybugdb/core'); if (!p) throw new Error('LadybugDB native module not found'); const b=fs.readFileSync(p); if (b[0]!==0x7f||b[1]!==0x45||b[2]!==0x4c||b[3]!==0x46) { throw new Error('GitNexus native module is not a Linux ELF binary'); }"
+
+FROM python:3.13-slim-bookworm
+
+ARG GITNEXUS_PACKAGE_DIR=gitnexus
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     LEGACY_PILOT_REPO_IMPORT_ROOT=/var/lib/legacy-pilot/repos
 
-RUN apt-get update \
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
-        nodejs \
-        npm \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /usr/sbin/nologin legacy \
+    && mkdir -p /var/lib/legacy-pilot/repos
+
+COPY --from=gitnexus-build --chown=legacy:legacy /opt/gitnexus-source /opt/gitnexus-source
+RUN ln -s /opt/gitnexus-source/${GITNEXUS_PACKAGE_DIR} /opt/gitnexus
 
 WORKDIR /app
 
@@ -29,9 +74,7 @@ RUN printf '%s\n' \
     > /usr/local/bin/gitnexus \
     && chmod +x /usr/local/bin/gitnexus
 
-RUN useradd --create-home --shell /usr/sbin/nologin legacy \
-    && mkdir -p /var/lib/legacy-pilot/repos \
-    && chown -R legacy:legacy /app /var/lib/legacy-pilot
+RUN chown -R legacy:legacy /app /var/lib/legacy-pilot
 
 USER legacy
 

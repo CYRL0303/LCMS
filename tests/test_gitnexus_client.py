@@ -157,7 +157,7 @@ def test_index_repo_runs_analyze_then_cypher_and_normalizes_graph():
 
     assert len(runner.calls) == 2
     assert runner.calls[0][0][0][:2] == ["custom-gitnexus", "analyze"]
-    assert runner.calls[1][0][0][:2] == ["custom-gitnexus", "cypher"]
+    assert runner.calls[1][0][0][:4] == ["custom-gitnexus", "cypher", "-r", "repo-demo"]
     assert payload["repo_id"] == "repo-demo"
     assert payload["graph_id"] == "GRAPH-repo-demo"
     assert Path(payload["repo_path"]) == FIXTURE_ROOT.resolve()
@@ -232,9 +232,9 @@ def test_query_graph_uses_cypher_uid_lookup_then_context_for_method_query():
 
     lookup_command = runner.calls[0][0][0]
     context_command = runner.calls[1][0][0]
-    assert lookup_command[:2] == ["custom-gitnexus", "cypher"]
-    assert "DatasetService.getVersion" in lookup_command[2]
-    assert context_command[:2] == ["custom-gitnexus", "context"]
+    assert lookup_command[:4] == ["custom-gitnexus", "cypher", "-r", "repo-demo"]
+    assert "DatasetService.getVersion" in lookup_command[4]
+    assert context_command[:4] == ["custom-gitnexus", "context", "-r", "repo-demo"]
     assert "--uid" in context_command
     assert "Method:src/main/java/com/legacy/DatasetService.java:DatasetService.getVersion#1" in context_command
     assert payload["graph_id"] == "GRAPH-GN"
@@ -295,10 +295,10 @@ def test_query_graph_route_term_falls_back_to_controller_method_context():
     route_lookup = runner.calls[0][0][0]
     method_lookup = runner.calls[1][0][0]
     context_command = runner.calls[2][0][0]
-    assert route_lookup[:2] == ["custom-gitnexus", "cypher"]
-    assert "/api/dataset/version" in route_lookup[2]
-    assert "DatasetController.getVersion" in method_lookup[2]
-    assert context_command[:2] == ["custom-gitnexus", "context"]
+    assert route_lookup[:4] == ["custom-gitnexus", "cypher", "-r", "repo-demo"]
+    assert "/api/dataset/version" in route_lookup[4]
+    assert "DatasetController.getVersion" in method_lookup[4]
+    assert context_command[:4] == ["custom-gitnexus", "context", "-r", "repo-demo"]
     assert payload["nodes"][0]["id"].endswith("DatasetController.getVersion#1")
     assert payload["relationships"][0]["target_id"].endswith("DatasetService.getVersion#1")
 
@@ -342,8 +342,8 @@ def test_query_graph_keeps_route_priority_when_query_terms_mix_symbol_and_route(
     )
 
     route_lookup = runner.calls[0][0][0]
-    assert "/api/dataset/version" in route_lookup[2]
-    assert "DatasetService.getVersion" not in route_lookup[2]
+    assert "/api/dataset/version" in route_lookup[4]
+    assert "DatasetService.getVersion" not in route_lookup[4]
 
 
 @pytest.mark.parametrize(
@@ -394,6 +394,31 @@ def test_non_zero_exit_becomes_recoverable_error_without_leaking_stderr_text():
     assert "Traceback" not in error.message
     assert error.diagnostics["stderr"] == "Traceback: internal secret"
     assert error.diagnostics["returncode"] == "17"
+
+
+def test_index_repo_cleans_incomplete_gitnexus_index_and_retries_analyze(tmp_path):
+    repo = tmp_path / "repo"
+    stale_index = repo / ".gitnexus"
+    stale_index.mkdir(parents=True)
+    (stale_index / "lbug.wal").write_text("stale", encoding="utf-8")
+    runner = RecordingRunner(
+        results=[
+            text_process(
+                "",
+                returncode=1,
+                stderr="Analysis did not finalize: stale lbug.wal",
+            ),
+            text_process("Repository indexed successfully\n"),
+            cypher_process("| n.id | r.type | r.confidence | r.reason | m.id |\n| --- | --- | --- | --- | --- |\n"),
+        ]
+    )
+    client = GitNexusCliClient(gitnexus_bin="custom-gitnexus", runner=runner)
+
+    client.index_repo(repo_index_request(repo_uri=repo.resolve().as_uri()))
+
+    commands = [call[0][0] for call in runner.calls]
+    assert [command[1] for command in commands] == ["analyze", "analyze", "cypher"]
+    assert not stale_index.exists()
 
 
 def test_index_repo_rejects_unsupported_remote_repo_uri_before_analyze():
@@ -580,6 +605,33 @@ def test_valid_cypher_markdown_is_normalized_into_mapper_ready_index_payload():
     assert payload["nodes"][0]["id"].endswith("DatasetService.getVersion#1")
     assert payload["relationships"][0]["type"] == "CALLS"
     assert client.last_diagnostics["stderr"] == "index diagnostic"
+
+
+def test_index_cypher_retries_with_safe_limit_when_large_output_is_truncated():
+    runner = RecordingRunner(
+        results=[
+            text_process("Repository indexed successfully\n"),
+            text_process('{"markdown": "| n.id | r.type |\n| --- |', returncode=0),
+            cypher_process(
+                "| n.id | r.type | r.confidence | r.reason | m.id |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| Method:src/A.java:A.one#1 | CALLS | 0.9 | retry-limit | Method:src/B.java:B.two#1 |\n"
+            ),
+        ]
+    )
+    client = GitNexusCliClient(
+        gitnexus_bin="custom-gitnexus",
+        max_graph_edges=10000,
+        runner=runner,
+    )
+
+    payload = client.index_repo(repo_index_request())
+
+    first_cypher = runner.calls[1][0][0]
+    retry_cypher = runner.calls[2][0][0]
+    assert "LIMIT 10000" in first_cypher[4]
+    assert "LIMIT 100" in retry_cypher[4]
+    assert payload["relationships"][0]["reason"] == "retry-limit"
 
 
 def test_cypher_process_edges_synthesize_route_to_controller_endpoint_edge():
@@ -802,4 +854,5 @@ def test_constructor_configuration_overrides_environment(monkeypatch):
     assert runner.calls[0][1]["timeout"] == 3.0
     assert runner.calls[0][1]["encoding"] == "utf-8"
     assert runner.calls[0][1]["errors"] == "replace"
-    assert "LIMIT 8" in cypher_command[2]
+    assert cypher_command[:4] == ["param-gitnexus", "cypher", "-r", "repo-demo"]
+    assert "LIMIT 8" in cypher_command[4]

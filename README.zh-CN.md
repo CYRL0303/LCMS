@@ -121,7 +121,11 @@ $env:GITNEXUS_REPO_ROOT='Q:\Hackathons\GitNexus-main\GitNexus-main\gitnexus'
 $env:GITNEXUS_TIMEOUT_SECONDS='60'
 $env:GITNEXUS_INDEX_TIMEOUT_SECONDS='120'
 $env:GITNEXUS_QUERY_TIMEOUT_SECONDS='30'
+$env:GITNEXUS_CYPHER_RETRY_EDGE_LIMIT='100'
 ```
+
+`GITNEXUS_CYPHER_RETRY_EDGE_LIMIT` 用于 `IndexRepo` 的大图 `cypher`
+响应被截断、无法解析 JSON 时，降到较小 edge limit 后重试一次。
 
 远端仓库支持：
 
@@ -266,7 +270,7 @@ Docker 产品化路径跑真实链路：
 web container
 -> /api reverse proxy
 -> api container
--> gitnexus_cli mounted at /opt/gitnexus
+-> gitnexus_cli built into /opt/gitnexus
 -> PostgreSQL graph payload store
 -> graph_context evidence builder
 -> qwen_api RCA generation
@@ -283,10 +287,17 @@ Copy-Item .env.prod.example .env.prod
 
 ```dotenv
 DASHSCOPE_API_KEY=
-GITNEXUS_REPO_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main\gitnexus
+GITNEXUS_SOURCE_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main
+GITNEXUS_PACKAGE_DIR=gitnexus
+GITNEXUS_CYPHER_RETRY_EDGE_LIMIT=100
 ```
 
-`GITNEXUS_REPO_ROOT` 必须指向真实 GitNexus runtime，且存在 `dist/cli/index.js`。API 容器把该目录只读挂载到 `/opt/gitnexus`，通过 `/usr/local/bin/gitnexus` 执行。这是真实 GitNexus CLI，不是 mock。
+`GITNEXUS_SOURCE_ROOT` 必须指向真实 GitNexus 源码 checkout。
+`GITNEXUS_PACKAGE_DIR` 是 checkout 内的 package 目录，通常是 `gitnexus`。
+API Docker build 会把源码作为 BuildKit named context 复制进镜像，在 Linux
+里运行 `npm ci` 和 `npm run build`，再把构建好的 package 暴露到
+`/opt/gitnexus`，通过 `/usr/local/bin/gitnexus` 执行。这样 Windows 本机的
+`node_modules` 不会被挂载进 Linux 容器，native binary 不会跨平台污染。
 
 启动：
 
@@ -306,7 +317,10 @@ Smoke：
 .\scripts\smoke-prod-compose.ps1 -TimeoutSeconds 240
 ```
 
-Smoke 脚本会先检查 `GITNEXUS_REPO_ROOT/dist/cli/index.js`，再进入 API 容器检查 `/opt/gitnexus/dist/cli/index.js`，并运行 `node /opt/gitnexus/dist/cli/index.js --help`，最后检查 `http://127.0.0.1:8080/api/health`。
+Smoke 脚本会先检查 GitNexus 源码 package，再进入 API 容器检查
+`/opt/gitnexus/dist/cli/index.js`，校验 LadybugDB native module 是 Linux ELF，
+并运行一个极小真实 `gitnexus analyze`，最后检查
+`http://127.0.0.1:8080/api/health`。
 
 停止但保留数据：
 
@@ -326,9 +340,9 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml down -v
 
 1. 创建 Alibaba Cloud ECS，安装 Docker 和 Docker Compose。
 2. 在 ECS 上 clone 本仓库。
-3. 在 ECS 上 clone/build GitNexus 到 `/opt/legacy-pilot/gitnexus`。
+3. 在 ECS 上 clone GitNexus 源码到 `/opt/legacy-pilot/GitNexus`。
 4. `Copy-Item .env.prod.example .env.prod`。
-5. 设置 `DASHSCOPE_API_KEY` 和 `GITNEXUS_REPO_ROOT=/opt/legacy-pilot/gitnexus`。
+5. 设置 `DASHSCOPE_API_KEY`、`GITNEXUS_SOURCE_ROOT=/opt/legacy-pilot/GitNexus` 和 `GITNEXUS_PACKAGE_DIR=gitnexus`。
 6. 运行 `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build`。
 7. 用 Nginx、Caddy 或 SLB 放到 `8080` 前面，只暴露 HTTPS。
 

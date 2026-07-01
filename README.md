@@ -171,6 +171,7 @@ GITNEXUS_REPO_ROOT=Q:/Hackathons/GitNexus-main/GitNexus-main/gitnexus \
 LEGACY_PILOT_GITNEXUS_FORCE_ANALYZE=1 \
 GITNEXUS_INDEX_TIMEOUT_SECONDS=120 \
 GITNEXUS_QUERY_TIMEOUT_SECONDS=30 \
+GITNEXUS_CYPHER_RETRY_EDGE_LIMIT=100 \
 python -m pytest tests/test_gitnexus_integration.py tests/test_structure1_production_fixture.py -q -rs
 ```
 
@@ -187,6 +188,9 @@ GitNexus client controls:
   and `impact` style queries.
 - `GITNEXUS_TIMEOUT_SECONDS`: backward-compatible fallback when the more
   specific timeout variables are not set.
+- `GITNEXUS_CYPHER_RETRY_EDGE_LIMIT`: fallback edge limit for `IndexRepo`
+  when a large GitNexus `cypher` response is truncated before valid JSON is
+  returned.
 - `RepoIndexRequest.repo_uri` may be a local path, `file://` URI, or public
   GitHub/GitLab repository URL in the form `https://github.com/<owner>/<repo>`
   or `https://gitlab.com/<group>/<repo>`. Remote URLs are cloned with
@@ -401,7 +405,7 @@ The production-like Docker path runs the real chain:
 web container
 -> /api reverse proxy
 -> api container
--> gitnexus_cli mounted at /opt/gitnexus
+-> gitnexus_cli built into /opt/gitnexus
 -> PostgreSQL graph payload store
 -> graph_context evidence builder
 -> qwen_api RCA generation
@@ -419,13 +423,18 @@ when running Compose:
 
 ```dotenv
 DASHSCOPE_API_KEY=
-GITNEXUS_REPO_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main\gitnexus
+GITNEXUS_SOURCE_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main
+GITNEXUS_PACKAGE_DIR=gitnexus
+GITNEXUS_CYPHER_RETRY_EDGE_LIMIT=100
 ```
 
-`GITNEXUS_REPO_ROOT` must point to a real GitNexus runtime with
-`dist/cli/index.js`. The API container mounts that directory read-only at
-`/opt/gitnexus` and executes it through `/usr/local/bin/gitnexus`. This is a
-real GitNexus CLI path, not a mock.
+`GITNEXUS_SOURCE_ROOT` must point to a real GitNexus source checkout.
+`GITNEXUS_PACKAGE_DIR` is the package directory inside that checkout, normally
+`gitnexus`. The API Docker build copies that source as a BuildKit named context,
+runs `npm ci` and `npm run build` inside Linux, then exposes the built package at
+`/opt/gitnexus` through `/usr/local/bin/gitnexus`. This builds the Linux GitNexus runtime inside the API image; it does not bind-mount host
+`node_modules`, so a Windows checkout cannot leak Windows native binaries into
+the Linux container.
 
 Run the stack:
 
@@ -445,9 +454,11 @@ Smoke test:
 .\scripts\smoke-prod-compose.ps1 -TimeoutSeconds 240
 ```
 
-The smoke script fails loudly if `GITNEXUS_REPO_ROOT/dist/cli/index.js` is
-missing. It also verifies the mounted CLI from inside the API container before
-checking same-origin API health through `http://127.0.0.1:8080/api/health`.
+The smoke script fails loudly if the GitNexus source package is missing. It also
+verifies `/opt/gitnexus/dist/cli/index.js`, checks that the LadybugDB native
+module is a Linux ELF binary, runs a tiny real `gitnexus analyze` inside the API
+container, then checks same-origin API health through
+`http://127.0.0.1:8080/api/health`.
 
 Stop while keeping data:
 
@@ -467,9 +478,11 @@ Fast hackathon deployment:
 
 1. Create an Alibaba Cloud ECS instance with Docker and Docker Compose.
 2. Clone this repository on the ECS instance.
-3. Clone or build GitNexus on the ECS instance at `/opt/legacy-pilot/gitnexus`.
+3. Clone GitNexus source on the ECS instance at `/opt/legacy-pilot/GitNexus`.
 4. Copy `.env.prod.example` to `.env.prod`.
-5. Set `DASHSCOPE_API_KEY` and `GITNEXUS_REPO_ROOT=/opt/legacy-pilot/gitnexus`.
+5. Set `DASHSCOPE_API_KEY`,
+   `GITNEXUS_SOURCE_ROOT=/opt/legacy-pilot/GitNexus`, and
+   `GITNEXUS_PACKAGE_DIR=gitnexus`.
 6. Run `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build`.
 7. Put Nginx, Caddy, or SLB in front of port `8080` and expose HTTPS only.
 

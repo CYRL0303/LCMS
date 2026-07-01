@@ -49,8 +49,10 @@ def test_prod_env_example_documents_real_backends_without_localhost_dsns():
     assert env_values["POSTGRES_USER"] == "legacy_pilot"
     assert env_values["POSTGRES_PASSWORD"] == "legacy_pilot_dev_password"
     assert env_values["POSTGRES_DB"] == "legacy_pilot"
-    assert env_values["GITNEXUS_REPO_ROOT"] == "./.runtime/gitnexus"
+    assert env_values["GITNEXUS_SOURCE_ROOT"] == "./.runtime/GitNexus"
+    assert env_values["GITNEXUS_PACKAGE_DIR"] == "gitnexus"
     assert env_values["LEGACY_PILOT_CODE_CORE_BACKEND"] == "gitnexus_cli"
+    assert env_values["GITNEXUS_CYPHER_RETRY_EDGE_LIMIT"] == "100"
     assert env_values["LEGACY_PILOT_GRAPH_STORE_BACKEND"] == "postgresql"
     assert env_values["LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND"] == "graph_context"
     assert env_values["LEGACY_PILOT_INCIDENT_MEMORY_BACKEND"] == "postgresql"
@@ -61,15 +63,29 @@ def test_prod_env_example_documents_real_backends_without_localhost_dsns():
     )
 
 
-def test_api_dockerfile_runs_real_gitnexus_wrapper_as_non_root():
+def test_api_dockerfile_builds_linux_gitnexus_runtime_inside_image():
     dockerfile = (ROOT / "Dockerfile.api").read_text(encoding="utf-8")
 
-    assert "FROM python:3.13-slim" in dockerfile
+    assert "# syntax=docker/dockerfile:" in dockerfile
+    assert "FROM node:22-bookworm-slim AS node-runtime" in dockerfile
+    assert "FROM node:22-bookworm-slim AS gitnexus-build" in dockerfile
+    assert "FROM python:3.13-slim-bookworm" in dockerfile
+    assert "COPY --from=gitnexus_source . ." in dockerfile
+    assert "ARG GITNEXUS_PACKAGE_DIR=gitnexus" in dockerfile
+    assert "gitnexus-shared/package.json" in dockerfile
+    assert "npm pkg delete scripts.prepare" in dockerfile
+    assert "npm ci" in dockerfile
+    assert "npm ci --ignore-scripts" not in dockerfile
+    assert "npm run build" in dockerfile
+    assert "lbugjs.node" in dockerfile
+    assert "not a Linux ELF binary" in dockerfile
     assert "apt-get install" in dockerfile
     assert " git " in dockerfile or " git\\" in dockerfile
-    assert " nodejs " in dockerfile or " nodejs\\" in dockerfile
+    assert "COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node" in dockerfile
     assert "exec node /opt/gitnexus/dist/cli/index.js" in dockerfile
     assert "LEGACY_PILOT_REPO_IMPORT_ROOT=/var/lib/legacy-pilot/repos" in dockerfile
+    assert "COPY --from=gitnexus-build --chown=legacy:legacy /opt/gitnexus-source /opt/gitnexus-source" in dockerfile
+    assert "chown -R legacy:legacy /app /var/lib/legacy-pilot" in dockerfile
     assert "USER legacy" in dockerfile
     assert "uvicorn" in dockerfile
     assert "legacy_pilot.middleware.app:app" in dockerfile
@@ -114,6 +130,12 @@ def test_prod_compose_defines_real_web_api_postgres_stack():
 
     api = services["api"]
     assert api["build"]["dockerfile"] == "Dockerfile.api"
+    assert api["build"]["additional_contexts"]["gitnexus_source"] == (
+        "${GITNEXUS_SOURCE_ROOT:?GITNEXUS_SOURCE_ROOT is required}"
+    )
+    assert api["build"]["args"]["GITNEXUS_PACKAGE_DIR"] == (
+        "${GITNEXUS_PACKAGE_DIR:-gitnexus}"
+    )
     assert api["depends_on"]["postgres"]["condition"] == "service_healthy"
     assert api["environment"]["LEGACY_PILOT_CODE_CORE_BACKEND"] == "gitnexus_cli"
     assert api["environment"]["GITNEXUS_BIN"] == "/usr/local/bin/gitnexus"
@@ -124,10 +146,9 @@ def test_prod_compose_defines_real_web_api_postgres_stack():
     assert api["environment"]["LEGACY_PILOT_REPO_IMPORT_ROOT"] == "/var/lib/legacy-pilot/repos"
     assert api["expose"] == ["8000"]
     assert "ports" not in api
-    assert any(
-        volume.get("target") == "/opt/gitnexus" and volume.get("read_only") is True
+    assert not any(
+        isinstance(volume, dict) and volume.get("target") == "/opt/gitnexus"
         for volume in api["volumes"]
-        if isinstance(volume, dict)
     )
 
     web = services["web"]
@@ -142,15 +163,21 @@ def test_prod_compose_smoke_script_checks_same_origin_api_health():
     assert "Read-EnvFile" in script
     assert "Get-EnvValue" in script
     assert "GetEnvironmentVariable($Key, \"Process\")" in script
-    assert "GITNEXUS_REPO_ROOT" in script
-    assert "dist/cli/index.js" in script
-    assert "Test-GitNexusRuntime" in script
-    assert "docker compose --env-file $EnvFile -f $ComposeFile up -d --build" in script
-    assert "docker compose --env-file $EnvFile -f $ComposeFile exec -T api test -f /opt/gitnexus/dist/cli/index.js" in script
-    assert "docker compose --env-file $EnvFile -f $ComposeFile exec -T api node /opt/gitnexus/dist/cli/index.js --help" in script
+    assert "Invoke-CheckedCommand" in script
+    assert "$LASTEXITCODE" in script
+    assert "GITNEXUS_SOURCE_ROOT" in script
+    assert "GITNEXUS_PACKAGE_DIR" in script
+    assert "package.json" in script
+    assert "Test-GitNexusBuildSource" in script
+    assert '$composeArgs = @("compose", "--env-file", $EnvFile, "-f", $ComposeFile)' in script
+    assert 'Invoke-CheckedCommand "docker" ($composeArgs + @("up", "-d", "--build"))' in script
+    assert 'Invoke-CheckedCommand "docker" ($composeArgs + @("exec", "-T", "api", "test", "-f", "/opt/gitnexus/dist/cli/index.js"))' in script
+    assert "node_modules/@ladybugdb/core" in script
+    assert "lbugjs.node" in script
+    assert "gitnexus analyze /tmp/gitnexus-smoke-repo --skip-git --index-only --name docker-smoke" in script
     assert "http://127.0.0.1:8080/api/health" in script
-    assert "docker compose --env-file $EnvFile -f $ComposeFile logs --tail 120 web" in script
-    assert "docker compose --env-file $EnvFile -f $ComposeFile logs --tail 120 api" in script
+    assert "docker @composeArgs logs --tail 120 web" in script
+    assert "docker @composeArgs logs --tail 120 api" in script
 
 
 def test_readme_documents_dockerized_alibaba_cloud_deployment():
@@ -158,7 +185,9 @@ def test_readme_documents_dockerized_alibaba_cloud_deployment():
 
     assert "Dockerized deployment" in readme
     assert "docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build" in readme
-    assert "GITNEXUS_REPO_ROOT" in readme
+    assert "GITNEXUS_SOURCE_ROOT" in readme
+    assert "GITNEXUS_PACKAGE_DIR" in readme
+    assert "builds the Linux GitNexus runtime inside the API image" in readme
     assert "Alibaba Cloud ECS" in readme
     assert "ACR + ACK + RDS" in readme
     assert "DASHSCOPE_API_KEY" in readme

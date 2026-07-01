@@ -26,6 +26,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+      additional_contexts:
+        gitnexus_source: ${GITNEXUS_SOURCE_ROOT:?GITNEXUS_SOURCE_ROOT is required}
+      args:
+        GITNEXUS_PACKAGE_DIR: ${GITNEXUS_PACKAGE_DIR:-gitnexus}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -57,10 +61,6 @@ services:
       LEGACY_PILOT_REPO_IMPORT_TIMEOUT_SECONDS: ${LEGACY_PILOT_REPO_IMPORT_TIMEOUT_SECONDS:-120}
     volumes:
       - repo-cache:/var/lib/legacy-pilot/repos
-      - type: bind
-        source: ${GITNEXUS_REPO_ROOT:?GITNEXUS_REPO_ROOT is required}
-        target: /opt/gitnexus
-        read_only: true
     expose:
       - "8000"
     networks:

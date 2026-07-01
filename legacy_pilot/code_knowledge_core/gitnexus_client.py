@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 from collections.abc import Callable
 from hashlib import sha256
@@ -21,6 +22,7 @@ DEFAULT_GITNEXUS_BIN = "gitnexus"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_GRAPH_NODES = 5000
 DEFAULT_MAX_GRAPH_EDGES = 10000
+DEFAULT_CYPHER_RETRY_EDGE_LIMIT = 100
 GITNEXUS_CYPHER_PARSER_VERSION = "gitnexus_cli+cypher_v1"
 
 
@@ -42,6 +44,7 @@ class GitNexusCliClient:
         force_analyze: bool | None = None,
         max_graph_nodes: int | None = None,
         max_graph_edges: int | None = None,
+        cypher_retry_edge_limit: int | None = None,
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ):
         self.gitnexus_bin = gitnexus_bin or os.getenv("GITNEXUS_BIN") or DEFAULT_GITNEXUS_BIN
@@ -76,6 +79,11 @@ class GitNexusCliClient:
             max_graph_edges,
             "LEGACY_PILOT_MAX_GRAPH_EDGES",
             DEFAULT_MAX_GRAPH_EDGES,
+        )
+        self.cypher_retry_edge_limit = _int_config(
+            cypher_retry_edge_limit,
+            "GITNEXUS_CYPHER_RETRY_EDGE_LIMIT",
+            DEFAULT_CYPHER_RETRY_EDGE_LIMIT,
         )
         self._runner = runner or subprocess.run
         self.last_diagnostics: dict[str, str] = {}
@@ -130,25 +138,46 @@ class GitNexusCliClient:
             "--name",
             repo_id,
         ]
-        self._run_text(analyze_command, operation="index", timeout_category="index")
+        try:
+            self._run_text(analyze_command, operation="index", timeout_category="index")
+        except IndexingError as exc:
+            if not _is_incomplete_gitnexus_index_error(exc.diagnostics):
+                raise
+            _remove_gitnexus_index(repo_path)
+            self._run_text(analyze_command, operation="index", timeout_category="index")
 
     def _run_index_cypher(self, request: RepoIndexRequest) -> dict[str, Any]:
-        raw_payload = self._run_json(
-            [
-                self.gitnexus_bin,
-                "cypher",
-                (
-                    "MATCH (n)-[r]->(m) "
-                    "RETURN n.id, r.type, r.confidence, r.reason, m.id "
-                    f"LIMIT {self.max_graph_edges}"
-                ),
-                "-r",
-                request.repo_id,
-            ],
-            operation="index",
-            timeout_category="query",
-        )
+        raw_payload = self._run_index_cypher_with_limit(request, self.max_graph_edges)
         return self._normalize_cypher_graph_payload(raw_payload, request=request)
+
+    def _run_index_cypher_with_limit(
+        self,
+        request: RepoIndexRequest,
+        edge_limit: int,
+    ) -> dict[str, Any]:
+        try:
+            return self._run_json(
+                _index_cypher_command(
+                    self.gitnexus_bin,
+                    repo_id=request.repo_id,
+                    edge_limit=edge_limit,
+                ),
+                operation="index",
+                timeout_category="query",
+            )
+        except IndexingError as exc:
+            retry_limit = min(self.cypher_retry_edge_limit, edge_limit)
+            if not _is_invalid_json_error(exc) or retry_limit >= edge_limit:
+                raise
+            return self._run_json(
+                _index_cypher_command(
+                    self.gitnexus_bin,
+                    repo_id=request.repo_id,
+                    edge_limit=retry_limit,
+                ),
+                operation="index",
+                timeout_category="query",
+            )
 
     def query_graph(self, query: GraphQuery) -> dict[str, Any]:
         plan = plan_graph_query(query)
@@ -165,10 +194,10 @@ class GitNexusCliClient:
             [
                 self.gitnexus_bin,
                 "context",
-                "--uid",
-                uid,
                 "-r",
                 query.repo_id,
+                "--uid",
+                uid,
                 "--content",
             ],
             operation="query",
@@ -400,14 +429,14 @@ class GitNexusCliClient:
             [
                 self.gitnexus_bin,
                 "cypher",
+                "-r",
+                query.repo_id,
                 (
                     "MATCH (n) "
                     f"WHERE n.id CONTAINS {_cypher_string(term)} "
                     "RETURN n.id, n.name, n.filePath, n.startLine, n.endLine "
                     "LIMIT 10"
                 ),
-                "-r",
-                query.repo_id,
             ],
             operation="query",
             timeout_category="query",
@@ -427,14 +456,14 @@ class GitNexusCliClient:
             [
                 self.gitnexus_bin,
                 "cypher",
+                "-r",
+                query.repo_id,
                 (
                     "MATCH (n) "
                     f"WHERE n.content CONTAINS {_cypher_string(route)} "
                     "RETURN n.id, n.name, n.filePath "
                     "LIMIT 5"
                 ),
-                "-r",
-                query.repo_id,
             ],
             operation="query",
             timeout_category="query",
@@ -573,6 +602,48 @@ def _diagnostics(
     if returncode is not None:
         diagnostics["returncode"] = str(returncode)
     return diagnostics
+
+
+def _is_incomplete_gitnexus_index_error(diagnostics: dict[str, str] | None) -> bool:
+    if not diagnostics:
+        return False
+    text = "\n".join(diagnostics.values()).lower()
+    return (
+        "analysis did not finalize" in text
+        or "on-disk index is incomplete" in text
+        or "lbug.wal" in text
+    )
+
+
+def _is_invalid_json_error(error: IndexingError | QueryError) -> bool:
+    return "returned invalid JSON" in error.message
+
+
+def _index_cypher_command(
+    gitnexus_bin: str,
+    *,
+    repo_id: str,
+    edge_limit: int,
+) -> list[str]:
+    return [
+        gitnexus_bin,
+        "cypher",
+        "-r",
+        repo_id,
+        (
+            "MATCH (n)-[r]->(m) "
+            "RETURN n.id, r.type, r.confidence, r.reason, m.id "
+            f"LIMIT {edge_limit}"
+        ),
+    ]
+
+
+def _remove_gitnexus_index(repo_path: str) -> None:
+    index_path = os.path.join(repo_path, ".gitnexus")
+    if os.path.islink(index_path):
+        os.unlink(index_path)
+    elif os.path.isdir(index_path):
+        shutil.rmtree(index_path)
 
 
 def _decode_text(value: Any) -> str:
