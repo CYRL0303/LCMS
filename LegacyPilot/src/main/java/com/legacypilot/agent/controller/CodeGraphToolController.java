@@ -1,6 +1,7 @@
 package com.legacypilot.agent.controller;
 
-import com.legacypilot.agent.service.AgentCurrentCodeAnalysisService;
+import com.legacypilot.agent.service.AgentContextStore;
+import com.legacypilot.agent.tool.graph.CodeGraphTool;
 import com.legacypilot.codeanalysis.entity.CodeAnalysisResult;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,14 +13,19 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/agent/tools/code-graph")
 public class CodeGraphToolController {
-    private final AgentCurrentCodeAnalysisService agentCurrentCodeAnalysisService;
+    private final AgentContextStore agentContextStore;
+    private final CodeGraphTool codeGraphTool;
 
-    public CodeGraphToolController(AgentCurrentCodeAnalysisService agentCurrentCodeAnalysisService) {
-        this.agentCurrentCodeAnalysisService = agentCurrentCodeAnalysisService;
+    public CodeGraphToolController(
+            AgentContextStore agentContextStore,
+            CodeGraphTool codeGraphTool
+    ) {
+        this.agentContextStore = agentContextStore;
+        this.codeGraphTool = codeGraphTool;
     }
 
     @GetMapping("/graph")
     public CodeAnalysisResult getCurrentGraph() {
-        return agentCurrentCodeAnalysisService.currentGraph();
+        return codeGraphTool.getGraph(agentContextStore.currentRepoId());
     }
 }
