@@ -1,267 +1,52 @@
-# LegacyPilot 项目运行说明
+# LegacyPilot 运行说明
 
-## 1. 当前项目状态
-
-LegacyPilot 是一个面向 Java/Spring 老项目维护场景的代码分析与 Agent 平台。当前重点已经从早期 mock/demo 流程，切换到 Java 后端自研 `codeanalysis` 模块。
-
-现在主链路是：
-
-```text
-Postman / Frontend
-  -> LegacyPilot Java Spring Boot
-  -> ProjectOnboardingService
-  -> RepositoryCodeAnalysisService
-  -> JavaCodeAnalysisService
-  -> JavaSourceStructureParser / SpringEndpointParser
-  -> 返回 project + repository + files + graph summary
-```
-
-也就是说，当前 `POST /api/onboarding/projects` 不再依赖 Python LCMS 或 GitNexus CLI。Python 服务和 GitNexus 代码暂时保留，但不是当前测试主链路。
-
-## 2. 仓库目录
+## 项目目录
 
 ```text
 D:\Hackathon
-|-- LegacyPilot
-|   |-- Java Spring Boot 后端
-|   |-- 当前主流程、项目接入、文件扫描、Java/Spring 代码分析
-|
-|-- LegacyPilot-Frontend
-|   |-- React + TypeScript 前端空壳
-|
-|-- LCMS
-|   |-- Python FastAPI 服务
-|   |-- 之前用于调用 GitNexus CLI / Code Knowledge Core
-|   |-- 当前主流程暂时不依赖它
-|
-|-- PROJECT_RUNBOOK.zh-CN.md
-|-- PROJECT_RUNBOOK.md
-|-- PROJECT_CONTEXT_PROMPT.zh-CN.md
+|-- LegacyPilot              Java Spring Boot 后端
+|-- LegacyPilot-Frontend     React + TypeScript 前端
+|-- LCMS                     早期 Python/GitNexus 测试服务，当前主流程不依赖
 ```
 
-## 3. 当前后端模块结构
-
-Java 后端目录：
-
-```text
-LegacyPilot/src/main/java/com/legacypilot
-|-- onboarding
-|   |-- controller
-|   |-- dto
-|   |-- service
-|
-|-- project
-|   |-- controller
-|   |-- dto
-|   |-- entity
-|   |-- service
-|
-|-- repository
-|   |-- controller
-|   |-- dto
-|   |-- entity
-|   |-- service
-|
-|-- codeanalysis
-|   |-- context
-|   |-- detector
-|   |-- entity
-|   |-- parser
-|   |-- service
-|
-|-- incident
-|-- task
-|-- lcms
-|-- workspace
-|-- common
-```
-
-重点模块：
-
-| 模块 | 作用 |
-| --- | --- |
-| `onboarding` | 一键接入项目来源，当前支持 LOCAL_PATH，预留 GIT_URL |
-| `repository` | Git 元数据读取、文件扫描、仓库相关 API |
-| `codeanalysis` | 当前自研代码分析算法 |
-| `lcms` | 之前用于调用 Python/GitNexus 的客户端和 DTO，当前主链路暂时不走 |
-| `workspace` | 临时内存存储，后续可替换为数据库 |
-
-## 4. 当前 Code Analysis 能力
-
-当前已经实现的能力：
-
-```text
-1. 扫描本地项目源码文件
-2. 检测项目类型
-3. 解析 Java 类和方法
-4. 解析 Spring Controller 接口
-5. 提取接口 path 和 HTTP method
-6. 支持多 path、多 method 组合
-7. 构建基础 node / edge / evidence
-8. 返回 graph summary
-```
-
-主要实现文件：
-
-```text
-LegacyPilot/src/main/java/com/legacypilot/codeanalysis/service/JavaCodeAnalysisService.java
-LegacyPilot/src/main/java/com/legacypilot/codeanalysis/parser/JavaSourceStructureParser.java
-LegacyPilot/src/main/java/com/legacypilot/codeanalysis/parser/SpringEndpointParser.java
-```
-
-### 4.1 SpringEndpointParser 已优化内容
-
-`SpringEndpointParser` 当前支持：
-
-```java
-@GetMapping("/users")
-@GetMapping(value = "/users")
-@GetMapping(path = "/users")
-@GetMapping({"/users", "/members"})
-@RequestMapping(value = {"/api", "/internal"})
-@RequestMapping(method = {RequestMethod.GET, RequestMethod.POST})
-```
-
-当前会生成：
-
-```text
-Controller Class node
-Handler Method node
-API Endpoint node
-
-Controller Class -> Handler Method
-Handler Method -> API Endpoint
-```
-
-同时会生成 evidence：
-
-```text
-spring_mapping_annotation
-spring_handler_method
-spring_controller_class
-```
-
-### 4.2 当前限制
-
-现在自研算法还没有完全达到 GitNexus CLI 的图谱丰富度。
-
-已知差距主要在 edge：
-
-```text
-当前 Java 自研 codeanalysis：
-  可以识别基础结构和 Spring endpoint
-
-GitNexus CLI：
-  还能识别更多 method call、import、extends、implements、package、flow 等关系
-```
-
-所以如果你看到：
-
-```text
-nodeCount 接近
-edgeCount 比 GitNexus 少很多
-```
-
-这是当前阶段的正常现象。下一步应该重点优化 `JavaSourceStructureParser`，增加：
-
-```text
-PACKAGE_CONTAINS_CLASS
-CLASS_DECLARES_METHOD
-CLASS_IMPORTS_TYPE
-CLASS_EXTENDS_CLASS
-CLASS_IMPLEMENTS_INTERFACE
-METHOD_CALLS_METHOD
-```
-
-## 5. GitNexus CLI 当前状态
-
-之前 GitNexus CLI 是通过 Python LCMS 间接调用的。现在为了测试自研 Java `codeanalysis`，GitNexus 调用已经暂时注释。
-
-切换位置在：
-
-```text
-LegacyPilot/src/main/java/com/legacypilot/codeanalysis/service/RepositoryCodeAnalysisService.java
-```
-
-当前正在执行的是：
-
-```java
-CodeAnalysisResult analysisResult =
-        javaCodeAnalysisService.analyze(repository.repoId(), repository.localRepoPath());
-```
-
-旧的 GitNexus / LCMS 调用没有删除，而是保留在块注释里：
-
-```java
-/*
-CodeKnowledgeGraphSnapshotResponse graphSnapshot =
-        codeKnowledgeClient.indexRepository(repository.repoId(), repository.localRepoPath());
-
-return new RepositoryGraphAnalysisResponse(
-        repository.repoId(),
-        graphSnapshot.graphId(),
-        graphSnapshot.nodeCount(),
-        graphSnapshot.edgeCount(),
-        graphSnapshot.generatedAt()
-);
-*/
-```
-
-如果之后要切回 GitNexus，需要恢复：
-
-```java
-private final CodeKnowledgeClient codeKnowledgeClient;
-```
-
-构造器参数也要恢复：
-
-```java
-CodeKnowledgeClient codeKnowledgeClient
-```
-
-然后把当前 `JavaCodeAnalysisService` 调用注释掉。
-
-## 6. 本地启动方式
-
-当前测试自研 Java codeanalysis 时，只需要启动 Java 后端。
+## 后端启动
 
 ```powershell
 cd D:\Hackathon\LegacyPilot
 mvn.cmd spring-boot:run
 ```
 
-默认端口：
+默认地址：
 
 ```text
 http://localhost:8080
 ```
 
-健康检查：
+## 前端启动
 
-```http
-GET http://localhost:8080/api/analysis/status
+```powershell
+cd D:\Hackathon\LegacyPilot-Frontend
+npm.cmd install
+npm.cmd run dev
 ```
 
-当前不需要启动：
+默认地址：
 
 ```text
-D:\Hackathon\LCMS
+http://localhost:5173
 ```
 
-除非你要测试 Python / GitNexus 旧链路。
+## 基本测试流程
 
-## 7. Postman 调用方式
+### 1. Onboarding 项目
 
-### 7.1 一键接入项目
-
-请求地址：
+先让后端知道当前要分析哪个项目：
 
 ```http
 POST http://localhost:8080/api/onboarding/projects
-Content-Type: application/json
 ```
 
-LOCAL_PATH 推荐测试 Java 后端自身：
+Body：
 
 ```json
 {
@@ -271,251 +56,137 @@ LOCAL_PATH 推荐测试 Java 后端自身：
 }
 ```
 
-也可以测试整个 workspace：
+说明：
 
-```json
-{
-  "projectName": "Hackathon Workspace",
-  "sourceType": "LOCAL_PATH",
-  "localRepoPath": "D:\\Hackathon"
-}
+```text
+当前可用：LOCAL_PATH
+已预留但未完成：GIT_URL
 ```
 
-注意：`D:\Hackathon` 是 workspace 根目录，不是单独项目。当前代码已经尽量容错扫描，但最终应该新增 workspace/module discovery，而不是一直把 workspace 当成一个普通 repo。
-
-GIT_URL 路径已经预留，但当前还没有实现 clone。测试时会返回 `501 Not Implemented`：
-
-```json
-{
-  "projectName": "Remote Demo",
-  "sourceType": "GIT_URL",
-  "repositoryUrl": "https://github.com/owner/repository.git",
-  "branch": "main",
-  "cloneToLocal": true
-}
-```
-
-### 7.2 成功返回结构
-
-成功后会返回：
-
-```json
-{
-  "project": {
-    "projectId": "PROJ-...",
-    "name": "LegacyPilot",
-    "repositoryUrl": "...",
-    "defaultBranch": "...",
-    "createdAt": "..."
-  },
-  "repository": {
-    "repoId": "REPO-...",
-    "projectId": "PROJ-...",
-    "sourceType": "LOCAL_PATH",
-    "repositoryUrl": "...",
-    "localRepoPath": "D:\\Hackathon\\LegacyPilot",
-    "branch": "...",
-    "commitSha": "...",
-    "graphId": "GRAPH-REPO-...",
-    "taskId": "TASK-...",
-    "createdAt": "..."
-  },
-  "files": {
-    "repoId": "REPO-...",
-    "localRepoPath": "D:\\Hackathon\\LegacyPilot",
-    "totalFiles": 57,
-    "javaFiles": [],
-    "pythonFiles": [],
-    "configFiles": [],
-    "buildFiles": [],
-    "markdownFiles": []
-  },
-  "graph": {
-    "repoId": "REPO-...",
-    "graphId": "GRAPH-REPO-...",
-    "nodeCount": 215,
-    "edgeCount": 24,
-    "generatedAt": "..."
-  }
-}
-```
-
-字段说明：
-
-| 字段 | 含义 |
-| --- | --- |
-| `project` | LegacyPilot 内部项目容器 |
-| `repository` | 本地 Git 仓库元数据 |
-| `files` | 文件扫描摘要 |
-| `graph` | 自研 Java codeanalysis 返回的图谱摘要 |
-
-### 7.3 单独重新分析仓库
-
-如果项目已经 onboarding 过，可以用：
+### 2. 测 Agent 主入口
 
 ```http
-POST http://localhost:8080/api/repos/{repoId}/analyze
+POST http://localhost:8080/api/agent/chat
 ```
 
-不需要请求体。
-
-注意：Java 后端当前用内存存储，重启后旧 `repoId` 会失效，需要重新 onboarding。
-
-## 8. 常见问题
-
-### 8.1 返回 400：Failed to scan repository source files
-
-这通常出现在扫描 workspace 根目录时，例如：
+RCA 示例：
 
 ```json
 {
-  "localRepoPath": "D:\\Hackathon"
+  "message": "order cancel 接口 500 报错",
+  "maxCandidates": 3
 }
 ```
 
-当前已经在这些位置做了容错扫描：
+接口探索示例：
 
-```text
-JavaCodeAnalysisService
-ProjectTypeDetector
-RepositoryFileScannerService
+```json
+{
+  "message": "这个项目有哪些接口"
+}
 ```
 
-如果仍然失败，看 Java 控制台中文日志。后续正式方案应该引入：
+代码图谱示例：
 
-```text
-ScanIssue
-ScanIssueSeverity
-WorkspaceScanService
-ModuleDiscoveryService
+```json
+{
+  "message": "看一下代码图谱"
+}
 ```
 
-不能只靠简单跳过文件。
+项目总结示例：
 
-### 8.2 返回的 edgeCount 比 GitNexus 少很多
-
-这是当前自研算法能力范围导致的。现在主要有：
-
-```text
-Controller -> Handler Method
-Handler Method -> API Endpoint
-基础 Java class/method 节点
+```json
+{
+  "message": "总结一下这个项目"
+}
 ```
 
-还没有完整实现：
+主要看返回里的：
 
 ```text
-method call graph
-import graph
-extends/implements graph
-package graph
-service/repository dependency graph
+query              Agent 如何理解自然语言
+toolResults        Agent 实际调用了哪些工具
+agentContextText   给未来 Qwen 使用的上下文文本
 ```
 
-所以 edge 数少是正常的，后续要继续增强 `JavaSourceStructureParser`。
+当前还没接 Qwen，所以 `answer` 是占位文本。
 
-### 8.3 为什么现在不需要启动 Python
+## 后端模块说明
 
-因为当前主链路已经切到：
+| 模块 | 功能 |
+| --- | --- |
+| `onboarding` | 接入项目来源，当前支持本地路径，预留 GitHub URL |
+| `project` | 项目信息管理 |
+| `repository` | 仓库信息、Git 元数据、文件扫描 |
+| `codeanalysis` | 自研代码分析算法，生成节点、边、endpoint、evidence |
+| `agenttool` | 给 Agent 使用的工具层 |
+| `agent` | Agent 入口、规则调度、Qwen 接入边界 |
+| `workspace` | 临时内存存储，后续可替换为数据库 |
+| `incident` | 事故分析相关雏形 |
+| `task` | 分析任务状态相关雏形 |
+| `lcms` | 早期 Python/GitNexus 客户端遗留模块，当前主流程不依赖 |
 
-```text
-RepositoryCodeAnalysisService -> JavaCodeAnalysisService
-```
+## AgentTool 当前能力
 
-不是：
-
-```text
-RepositoryCodeAnalysisService -> CodeKnowledgeClient -> LCMS -> GitNexus
-```
-
-### 8.4 什么时候还需要 Python
-
-Python 可以先保留，后续可能用于：
-
-```text
-Qwen 调用封装
-RAG / 向量检索
-prompt 编排
-长文本切分
-实验性分析工具
-```
-
-但如果 Agent 和 codeanalysis 都决定用 Java 实现，Python 暂时不是主流程必需服务。
-
-## 9. 当前 API 列表
-
-### 9.1 Onboarding
-
-| Method | Path | 作用 |
+| Tool | 状态 | 功能 |
 | --- | --- | --- |
-| `POST` | `/api/onboarding/projects` | 接入项目来源并触发 Java 自研代码分析；LOCAL_PATH 已可用，GIT_URL 预留 |
+| `query.understand` | 可用 | 识别 intent、targetType、keywords、errorSignals、searchPlan |
+| `endpoint.select` | 可用 | 根据自然语言选择候选 endpoint |
+| `endpoint.list` | 可用 | 列出当前项目 endpoint |
+| `endpoint.lookup` | 可用 | 按 path 查询 endpoint |
+| `evidence.endpoint` | 可用 | 根据 endpoint 获取源码证据片段 |
+| `code_graph.get_graph` | 可用 | 返回当前项目代码图谱 |
+| `context.build` | 可用 | 生成 Agent 可读上下文文本 |
+| `rca.investigate` | 可用 | 规则版 RCA 小闭环 |
+| `trace.method_calls` | 未实现 | 需要后续补方法调用链算法 |
+| `qwen.complete` | 未实现 | 需要后续接 Qwen |
 
-### 9.2 Repository
+## Agent 调度规则
 
-| Method | Path | 作用 |
-| --- | --- | --- |
-| `POST` | `/api/repos/connect` | 将本地仓库连接到已有 project |
-| `GET` | `/api/repos/{repoId}/files` | 查看文件扫描结果 |
-| `POST` | `/api/repos/{repoId}/analyze` | 重新运行代码分析 |
+`/api/agent/chat` 会先理解自然语言，再按 intent 选择工具：
 
-### 9.3 Project
+```text
+RCA
+-> rca.investigate
 
-| Method | Path | 作用 |
-| --- | --- | --- |
-| `POST` | `/api/projects` | 创建项目元数据 |
-| `GET` | `/api/projects` | 查看当前内存中的项目 |
+EXPLORE_ENDPOINT
+-> endpoint.list
 
-### 9.4 Incident / Task
+EXPLORE_GRAPH
+-> code_graph.get_graph
 
-| Method | Path | 作用 |
-| --- | --- | --- |
-| `POST` | `/api/incidents/analyze` | 创建 incident 分析任务占位 |
-| `GET` | `/api/incidents/{incidentId}` | 查看 incident |
-| `POST` | `/api/incidents/{incidentId}/confirm` | 确认 incident |
-| `GET` | `/api/analysis/status` | 后端状态检查 |
-| `GET` | `/api/analysis/{taskId}` | 查看任务状态 |
+SUMMARIZE_PROJECT
+-> code_graph.get_graph
+-> endpoint.list
 
-## 10. 后续开发建议
-
-优先级建议：
-
-1. 增强 `JavaSourceStructureParser`，补齐 package/class/method/import/extends/implements 关系。
-2. 增加 `ScanIssue`，把跳过文件、不可读文件、重要文件失败都结构化返回给前端。
-3. 增加 workspace/module discovery，支持扫描 `D:\Hackathon` 这种大目录。
-4. 增加 graph detail API，返回完整 nodes/edges，而不是只有 summary。
-5. 前端接入 onboarding API 和 graph summary。
-6. 接入 Qwen，放到 Java Agent 或独立模型服务里。
-7. 增加数据库，把当前内存 Map 替换成持久化表。
-
-## 11. 常用命令
-
-启动 Java：
-
-```powershell
-cd D:\Hackathon\LegacyPilot
-mvn.cmd spring-boot:run
+LOOKUP_CODE
+-> 当前返回未实现
 ```
 
-编译 Java：
+## 当前限制
 
-```powershell
-cd D:\Hackathon\LegacyPilot
-mvn.cmd test
+```text
+1. 没有数据库，Spring 重启后需要重新 onboarding
+2. 还没接 Qwen，answer 是占位文本
+3. GIT_URL 已预留但还不能 clone
+4. codeanalysis 还没有完整方法调用链
+5. 前端还没有完整绑定后端 API
 ```
 
-启动前端：
+## 常用命令
 
-```powershell
-cd D:\Hackathon\LegacyPilot-Frontend
-npm.cmd run dev
-```
-
-Git 提交：
+查看 Git 状态：
 
 ```powershell
 cd D:\Hackathon
 git status
+```
+
+提交当前改动：
+
+```powershell
 git add .
-git commit -m "Update Java code analysis documentation"
+git commit -m "你的提交说明"
 git push origin Hackathon
 ```
