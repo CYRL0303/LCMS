@@ -42,7 +42,7 @@ public class CodeKnowledgeClient {
 
     /**
      * Requests a repository graph snapshot from Python using the minimum data
-     * Java already owns after local-project onboarding.
+     * Java already owns after project onboarding.
      */
     public CodeKnowledgeGraphSnapshotResponse indexRepository(String repoId, String localRepoPath) {
         String languageHint = detectLanguageHint(localRepoPath);

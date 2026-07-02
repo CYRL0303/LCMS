@@ -1,7 +1,7 @@
 package com.legacypilot.onboarding.controller;
 
-import com.legacypilot.onboarding.dto.ConnectLocalProjectRequest;
-import com.legacypilot.onboarding.dto.ConnectLocalProjectResponse;
+import com.legacypilot.onboarding.dto.OnboardProjectRequest;
+import com.legacypilot.onboarding.dto.OnboardProjectResponse;
 import com.legacypilot.onboarding.service.ProjectOnboardingService;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -21,12 +21,11 @@ public class OnboardingController {
     }
 
     /**
-     * One-shot local demo endpoint: create a project and connect a local Git
-     * repository from one request so users do not need to copy projectId between
-     * Postman calls.
+     * General project onboarding endpoint. Supports LOCAL_PATH now and reserves
+     * GIT_URL for the public GitHub clone flow.
      */
-    @PostMapping("/local-project")
-    public ConnectLocalProjectResponse connectLocalProject(@RequestBody ConnectLocalProjectRequest request) {
-        return projectOnboardingService.connectLocalProject(request);
+    @PostMapping("/projects")
+    public OnboardProjectResponse onboardProject(@RequestBody OnboardProjectRequest request) {
+        return projectOnboardingService.onboardProject(request);
     }
 }

@@ -16,7 +16,7 @@ Postman / Frontend
   -> 返回 project + repository + files + graph summary
 ```
 
-也就是说，当前 `POST /api/onboarding/local-project` 不再依赖 Python LCMS 或 GitNexus CLI。Python 服务和 GitNexus 代码暂时保留，但不是当前测试主链路。
+也就是说，当前 `POST /api/onboarding/projects` 不再依赖 Python LCMS 或 GitNexus CLI。Python 服务和 GitNexus 代码暂时保留，但不是当前测试主链路。
 
 ## 2. 仓库目录
 
@@ -80,7 +80,7 @@ LegacyPilot/src/main/java/com/legacypilot
 
 | 模块 | 作用 |
 | --- | --- |
-| `onboarding` | 一键接入本地项目 |
+| `onboarding` | 一键接入项目来源，当前支持 LOCAL_PATH，预留 GIT_URL |
 | `repository` | Git 元数据读取、文件扫描、仓库相关 API |
 | `codeanalysis` | 当前自研代码分析算法 |
 | `lcms` | 之前用于调用 Python/GitNexus 的客户端和 DTO，当前主链路暂时不走 |
@@ -252,20 +252,21 @@ D:\Hackathon\LCMS
 
 ## 7. Postman 调用方式
 
-### 7.1 一键接入本地项目
+### 7.1 一键接入项目
 
 请求地址：
 
 ```http
-POST http://localhost:8080/api/onboarding/local-project
+POST http://localhost:8080/api/onboarding/projects
 Content-Type: application/json
 ```
 
-推荐测试 Java 后端自身：
+LOCAL_PATH 推荐测试 Java 后端自身：
 
 ```json
 {
   "projectName": "LegacyPilot",
+  "sourceType": "LOCAL_PATH",
   "localRepoPath": "D:\\Hackathon\\LegacyPilot"
 }
 ```
@@ -275,11 +276,24 @@ Content-Type: application/json
 ```json
 {
   "projectName": "Hackathon Workspace",
+  "sourceType": "LOCAL_PATH",
   "localRepoPath": "D:\\Hackathon"
 }
 ```
 
 注意：`D:\Hackathon` 是 workspace 根目录，不是单独项目。当前代码已经尽量容错扫描，但最终应该新增 workspace/module discovery，而不是一直把 workspace 当成一个普通 repo。
+
+GIT_URL 路径已经预留，但当前还没有实现 clone。测试时会返回 `501 Not Implemented`：
+
+```json
+{
+  "projectName": "Remote Demo",
+  "sourceType": "GIT_URL",
+  "repositoryUrl": "https://github.com/owner/repository.git",
+  "branch": "main",
+  "cloneToLocal": true
+}
+```
 
 ### 7.2 成功返回结构
 
@@ -434,7 +448,7 @@ prompt 编排
 
 | Method | Path | 作用 |
 | --- | --- | --- |
-| `POST` | `/api/onboarding/local-project` | 接入本地 Git 项目并触发 Java 自研代码分析 |
+| `POST` | `/api/onboarding/projects` | 接入项目来源并触发 Java 自研代码分析；LOCAL_PATH 已可用，GIT_URL 预留 |
 
 ### 9.2 Repository
 
@@ -505,4 +519,3 @@ git add .
 git commit -m "Update Java code analysis documentation"
 git push origin Hackathon
 ```
-
