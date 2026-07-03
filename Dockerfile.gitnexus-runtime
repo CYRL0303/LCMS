@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1.7
+
+FROM node:22-bookworm-slim
+
+ARG GITNEXUS_PACKAGE_DIR=gitnexus
+
+ENV GITNEXUS_REPO_ROOT=/opt/gitnexus
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        g++ \
+        git \
+        make \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY vendor/gitnexus-source /opt/gitnexus-source
+
+RUN if [ -f /opt/gitnexus-source/gitnexus-shared/package.json ]; then \
+        cd /opt/gitnexus-source/gitnexus-shared \
+        && rm -rf node_modules dist \
+        && npm ci; \
+    fi
+
+WORKDIR /opt/gitnexus-source/${GITNEXUS_PACKAGE_DIR}
+
+RUN test -f package.json \
+    && rm -rf node_modules dist \
+    && npm pkg delete scripts.prepare \
+    && npm ci \
+    && npm run build \
+    && test -f dist/cli/index.js \
+    && node -e "const fs=require('fs'), path=require('path'); function find(dir){ for (const entry of fs.readdirSync(dir,{withFileTypes:true})) { const full=path.join(dir,entry.name); if (entry.isFile() && entry.name==='lbugjs.node') return full; if (entry.isDirectory()) { const found=find(full); if (found) return found; } } } const p=find('node_modules/@ladybugdb/core'); if (!p) throw new Error('LadybugDB native module not found'); const b=fs.readFileSync(p); if (b[0]!==0x7f||b[1]!==0x45||b[2]!==0x4c||b[3]!==0x46) { throw new Error('GitNexus native module is not a Linux ELF binary'); }" \
+    && mkdir -p /opt/gitnexus \
+    && cp -aL . /opt/gitnexus \
+    && rm -rf /opt/gitnexus-source \
+    && test -f /opt/gitnexus/dist/cli/index.js \
+    && node -e "const fs=require('fs'), path=require('path'); function find(dir){ for (const entry of fs.readdirSync(dir,{withFileTypes:true})) { const full=path.join(dir,entry.name); if (entry.isFile() && entry.name==='lbugjs.node') return full; if (entry.isDirectory()) { const found=find(full); if (found) return found; } } } const p=find('/opt/gitnexus/node_modules/@ladybugdb/core'); if (!p) throw new Error('LadybugDB native module not found'); const b=fs.readFileSync(p); if (b[0]!==0x7f||b[1]!==0x45||b[2]!==0x4c||b[3]!==0x46) { throw new Error('GitNexus native module is not a Linux ELF binary'); }"
+
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'exec node /opt/gitnexus/dist/cli/index.js "$@"' \
+    > /usr/local/bin/gitnexus \
+    && chmod +x /usr/local/bin/gitnexus
+
+WORKDIR /opt/gitnexus
+
+CMD ["gitnexus", "--help"]

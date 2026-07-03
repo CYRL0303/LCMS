@@ -116,13 +116,16 @@ npm run build
 
 ```powershell
 $env:LEGACY_PILOT_CODE_CORE_BACKEND='gitnexus_cli'
-$env:GITNEXUS_BIN='Q:\tmp\gitnexus-local.cmd'
-$env:GITNEXUS_REPO_ROOT='Q:\Hackathons\GitNexus-main\GitNexus-main\gitnexus'
+$env:GITNEXUS_BIN='gitnexus'
+$env:GITNEXUS_REPO_ROOT='vendor\gitnexus-source\gitnexus'
 $env:GITNEXUS_TIMEOUT_SECONDS='60'
 $env:GITNEXUS_INDEX_TIMEOUT_SECONDS='120'
 $env:GITNEXUS_QUERY_TIMEOUT_SECONDS='30'
 $env:GITNEXUS_CYPHER_RETRY_EDGE_LIMIT='100'
 ```
+
+本地手动跑 integration 时，`GITNEXUS_BIN` 也可以指向一个 wrapper，wrapper 运行
+`vendor\gitnexus-source\gitnexus\dist\cli\index.js`。
 
 `GITNEXUS_CYPHER_RETRY_EDGE_LIMIT` 用于 `IndexRepo` 的大图 `cypher`
 响应被截断、无法解析 JSON 时，降到较小 edge limit 后重试一次。
@@ -296,7 +299,7 @@ Docker 产品化路径跑真实链路：
 web container
 -> /api reverse proxy
 -> api container
--> gitnexus_cli built into /opt/gitnexus
+-> gitnexus_cli copied from gitnexus-runtime image
 -> PostgreSQL graph payload store
 -> graph_context evidence builder
 -> qwen_api RCA generation
@@ -313,8 +316,7 @@ Copy-Item .env.prod.example .env.prod
 
 ```dotenv
 DASHSCOPE_API_KEY=
-GITNEXUS_SOURCE_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main
-GITNEXUS_PACKAGE_DIR=gitnexus
+GITNEXUS_RUNTIME_IMAGE=legacy-pilot-gitnexus-runtime:local
 GITNEXUS_CYPHER_RETRY_EDGE_LIMIT=100
 LEGACY_PILOT_RCA_TIMEOUT_SECONDS=120
 LEGACY_PILOT_RCA_TRANSPORT_RETRIES=1
@@ -322,12 +324,44 @@ LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS=1
 LEGACY_PILOT_WEBHOOK_SECRET=
 ```
 
-`GITNEXUS_SOURCE_ROOT` 必须指向真实 GitNexus 源码 checkout。
-`GITNEXUS_PACKAGE_DIR` 是 checkout 内的 package 目录，通常是 `gitnexus`。
-API Docker build 会把源码作为 BuildKit named context 复制进镜像，在 Linux
-里运行 `npm ci` 和 `npm run build`，再把构建好的 package 暴露到
-`/opt/gitnexus`，通过 `/usr/local/bin/gitnexus` 执行。这样 Windows 本机的
-`node_modules` 不会被挂载进 Linux 容器，native binary 不会跨平台污染。
+GitNexus 源码已经 vendor 在 `vendor/gitnexus-source`。新机器只需要 clone
+本仓库，不需要单独 GitNexus checkout，也不需要对 GitNexus 执行 `git clone`。
+
+先从 vendored GitNexus 源码构建 runtime image：
+
+```powershell
+$env:GITNEXUS_PACKAGE_DIR='gitnexus'
+$env:GITNEXUS_RUNTIME_IMAGE='legacy-pilot-gitnexus-runtime:local'
+.\scripts\build-gitnexus-runtime.ps1
+```
+
+等价 Docker 命令：
+
+```bash
+docker build -f Dockerfile.gitnexus-runtime \
+  --build-arg GITNEXUS_PACKAGE_DIR=gitnexus \
+  -t legacy-pilot-gitnexus-runtime:local .
+```
+
+`Dockerfile.gitnexus-runtime` 会在独立镜像里构建 Linux GitNexus runtime：
+复制 `vendor/gitnexus-source`，运行 `npm ci` 和 `npm run build`，校验
+`dist/cli/index.js`，校验 `lbugjs.node` 是 Linux ELF，并写入
+`/usr/local/bin/gitnexus`。`Dockerfile.api` 只从 runtime image 复制
+`/opt/gitnexus`、`/usr/local/bin/gitnexus` 和 Node。API image 不再需要
+`GITNEXUS_SOURCE_ROOT`，云上也不需要宿主机 GitNexus checkout。
+
+如需推送同一 runtime image 到 Alibaba Cloud ACR：
+
+```powershell
+$env:GITNEXUS_RUNTIME_IMAGE='registry.cn-hangzhou.aliyuncs.com/qwenhack/gitnexus-runtime:2026-07-03'
+.\scripts\build-gitnexus-runtime.ps1 -Push
+```
+
+本地 build 后也可以用等价 push 命令：
+
+```bash
+docker push registry.cn-hangzhou.aliyuncs.com/qwenhack/gitnexus-runtime:2026-07-03
+```
 
 启动：
 
@@ -347,9 +381,9 @@ Smoke：
 .\scripts\smoke-prod-compose.ps1 -TimeoutSeconds 240
 ```
 
-Smoke 脚本会先检查 GitNexus 源码 package，再进入 API 容器检查
-`/opt/gitnexus/dist/cli/index.js`，校验 LadybugDB native module 是 Linux ELF，
-并运行一个极小真实 `gitnexus analyze`，最后检查
+Smoke 脚本会先检查 `GITNEXUS_RUNTIME_IMAGE` 不为空且不是 placeholder，
+再进入 API 容器检查 `/opt/gitnexus/dist/cli/index.js`，校验 LadybugDB native
+module 是 Linux ELF，并运行一个极小真实 `gitnexus analyze`，最后检查
 `http://127.0.0.1:8080/api/health`。
 
 停止但保留数据：
@@ -370,9 +404,9 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml down -v
 
 1. 创建 Alibaba Cloud ECS，安装 Docker 和 Docker Compose。
 2. 在 ECS 上 clone 本仓库。
-3. 在 ECS 上 clone GitNexus 源码到 `/opt/legacy-pilot/GitNexus`。
+3. 用 vendored `vendor/gitnexus-source` 构建 `legacy-pilot-gitnexus-runtime:local`，或从 Alibaba Cloud ACR pull 同一个 runtime image。
 4. `Copy-Item .env.prod.example .env.prod`。
-5. 设置 `DASHSCOPE_API_KEY`、`GITNEXUS_SOURCE_ROOT=/opt/legacy-pilot/GitNexus` 和 `GITNEXUS_PACKAGE_DIR=gitnexus`。
+5. 设置 `DASHSCOPE_API_KEY` 和 `GITNEXUS_RUNTIME_IMAGE`。
 6. 运行 `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build`。
 7. 用 Nginx、Caddy 或 SLB 放到 `8080` 前面，只暴露 HTTPS。
 
@@ -380,8 +414,9 @@ Hackathon demo 可用 compose 内 PostgreSQL + ECS cloud disk。产品数据建�
 
 ### 产品化路径
 
-- CI 构建 `legacy-pilot-api` 和 `legacy-pilot-web` 镜像。
-- 镜像推到 Alibaba Cloud ACR。
+- GitNexus 变化时构建并推送 `gitnexus-runtime:<version>`。
+- LegacyPilot 变化时 CI 构建 `legacy-pilot-api` 和 `legacy-pilot-web` 镜像。
+- 所有镜像推到 Alibaba Cloud ACR。
 - ACK 跑 `api` 和 `web` Deployment。
 - RDS PostgreSQL 存 graph payload 和 incident memory。
 - SLB/Ingress 提供 HTTPS。

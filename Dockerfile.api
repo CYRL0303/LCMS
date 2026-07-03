@@ -1,63 +1,29 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-bookworm-slim AS node-runtime
-
-FROM node:22-bookworm-slim AS gitnexus-build
-
-ARG GITNEXUS_PACKAGE_DIR=gitnexus
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        g++ \
-        git \
-        make \
-        python3 \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /opt/gitnexus-source
-COPY --from=gitnexus_source . .
-
-RUN if [ -f gitnexus-shared/package.json ]; then \
-        cd gitnexus-shared \
-        && rm -rf node_modules dist \
-        && npm ci; \
-    fi
-
-WORKDIR /opt/gitnexus-source/${GITNEXUS_PACKAGE_DIR}
-RUN test -f package.json \
-    && rm -rf node_modules dist \
-    && npm pkg delete scripts.prepare \
-    && npm ci \
-    && npm run build \
-    && test -f dist/cli/index.js \
-    && node -e "const fs=require('fs'), path=require('path'); function find(dir){ for (const entry of fs.readdirSync(dir,{withFileTypes:true})) { const full=path.join(dir,entry.name); if (entry.isFile() && entry.name==='lbugjs.node') return full; if (entry.isDirectory()) { const found=find(full); if (found) return found; } } } const p=find('node_modules/@ladybugdb/core'); if (!p) throw new Error('LadybugDB native module not found'); const b=fs.readFileSync(p); if (b[0]!==0x7f||b[1]!==0x45||b[2]!==0x4c||b[3]!==0x46) { throw new Error('GitNexus native module is not a Linux ELF binary'); }"
+ARG GITNEXUS_RUNTIME_IMAGE=legacy-pilot-gitnexus-runtime:local
+FROM ${GITNEXUS_RUNTIME_IMAGE} AS gitnexus-runtime
 
 FROM python:3.13-slim-bookworm
-
-ARG GITNEXUS_PACKAGE_DIR=gitnexus
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     LEGACY_PILOT_REPO_IMPORT_ROOT=/var/lib/legacy-pilot/repos
 
-COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=gitnexus-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=gitnexus-runtime /usr/local/bin/gitnexus /usr/local/bin/gitnexus
+COPY --from=gitnexus-runtime /opt/gitnexus /opt/gitnexus
 
-RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
-    && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
-    && apt-get update \
+RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /usr/sbin/nologin legacy \
-    && mkdir -p /var/lib/legacy-pilot/repos
-
-COPY --from=gitnexus-build --chown=legacy:legacy /opt/gitnexus-source /opt/gitnexus-source
-RUN ln -s /opt/gitnexus-source/${GITNEXUS_PACKAGE_DIR} /opt/gitnexus
+    && mkdir -p /var/lib/legacy-pilot/repos \
+    && test -f /opt/gitnexus/dist/cli/index.js \
+    && python -c "from pathlib import Path; root=Path('/opt/gitnexus/node_modules/@ladybugdb/core'); native=next(root.rglob('lbugjs.node'), None); assert native is not None, 'LadybugDB native module not found'; assert native.read_bytes()[:4] == b'\x7fELF', 'GitNexus native module is not a Linux ELF binary'"
 
 WORKDIR /app
 
@@ -67,14 +33,7 @@ COPY legacy_pilot ./legacy_pilot
 RUN python -m pip install --upgrade pip \
     && python -m pip install .
 
-RUN printf '%s\n' \
-    '#!/bin/sh' \
-    'set -eu' \
-    'exec node /opt/gitnexus/dist/cli/index.js "$@"' \
-    > /usr/local/bin/gitnexus \
-    && chmod +x /usr/local/bin/gitnexus
-
-RUN chown -R legacy:legacy /app /var/lib/legacy-pilot
+RUN chown -R legacy:legacy /app /var/lib/legacy-pilot /opt/gitnexus
 
 USER legacy
 

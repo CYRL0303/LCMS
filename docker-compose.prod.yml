@@ -26,10 +26,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-      additional_contexts:
-        gitnexus_source: ${GITNEXUS_SOURCE_ROOT:?GITNEXUS_SOURCE_ROOT is required}
       args:
-        GITNEXUS_PACKAGE_DIR: ${GITNEXUS_PACKAGE_DIR:-gitnexus}
+        GITNEXUS_RUNTIME_IMAGE: ${GITNEXUS_RUNTIME_IMAGE:?GITNEXUS_RUNTIME_IMAGE is required}
     restart: unless-stopped
     depends_on:
       postgres:

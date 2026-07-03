@@ -157,9 +157,9 @@ python -m pytest tests/test_structure1_production_fixture.py -q -rs
 
 GitNexus integration CI profile:
 
-1. Build the GitNexus CLI/runtime outside this repository.
-2. Set `GITNEXUS_BIN` to `gitnexus` or a wrapper such as `Q:/tmp/gitnexus-local.cmd`.
-3. Set `GITNEXUS_REPO_ROOT` to the local GitNexus runtime checkout.
+1. Build the vendored GitNexus CLI/runtime under `vendor/gitnexus-source/gitnexus`.
+2. Set `GITNEXUS_BIN` to `gitnexus` or a wrapper that runs the vendored `dist/cli/index.js`.
+3. Set `GITNEXUS_REPO_ROOT` to `vendor/gitnexus-source/gitnexus`.
 4. Enable opt-in integration tests with `LEGACY_PILOT_RUN_GITNEXUS_INTEGRATION=1`.
 5. Run the GitNexus integration suites.
 
@@ -167,7 +167,7 @@ GitNexus integration CI profile:
 LEGACY_PILOT_RUN_GITNEXUS_INTEGRATION=1 \
 LEGACY_PILOT_CODE_CORE_BACKEND=gitnexus_cli \
 GITNEXUS_BIN=gitnexus \
-GITNEXUS_REPO_ROOT=Q:/Hackathons/GitNexus-main/GitNexus-main/gitnexus \
+GITNEXUS_REPO_ROOT=vendor/gitnexus-source/gitnexus \
 LEGACY_PILOT_GITNEXUS_FORCE_ANALYZE=1 \
 GITNEXUS_INDEX_TIMEOUT_SECONDS=120 \
 GITNEXUS_QUERY_TIMEOUT_SECONDS=30 \
@@ -175,7 +175,7 @@ GITNEXUS_CYPHER_RETRY_EDGE_LIMIT=100 \
 python -m pytest tests/test_gitnexus_integration.py tests/test_structure1_production_fixture.py -q -rs
 ```
 
-`GITNEXUS_BIN` may also point to a local wrapper such as `Q:/tmp/gitnexus-local.cmd` when testing a source checkout build.
+`GITNEXUS_BIN` may also point to a local wrapper such as `Q:/tmp/gitnexus-local.cmd` when testing the vendored source build.
 
 GitNexus client controls:
 
@@ -438,7 +438,7 @@ The production-like Docker path runs the real chain:
 web container
 -> /api reverse proxy
 -> api container
--> gitnexus_cli built into /opt/gitnexus
+-> gitnexus_cli copied from gitnexus-runtime image
 -> PostgreSQL graph payload store
 -> graph_context evidence builder
 -> qwen_api RCA generation
@@ -456,8 +456,7 @@ when running Compose:
 
 ```dotenv
 DASHSCOPE_API_KEY=
-GITNEXUS_SOURCE_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main
-GITNEXUS_PACKAGE_DIR=gitnexus
+GITNEXUS_RUNTIME_IMAGE=legacy-pilot-gitnexus-runtime:local
 GITNEXUS_CYPHER_RETRY_EDGE_LIMIT=100
 LEGACY_PILOT_RCA_TIMEOUT_SECONDS=120
 LEGACY_PILOT_RCA_TRANSPORT_RETRIES=1
@@ -465,13 +464,45 @@ LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS=1
 LEGACY_PILOT_WEBHOOK_SECRET=
 ```
 
-`GITNEXUS_SOURCE_ROOT` must point to a real GitNexus source checkout.
-`GITNEXUS_PACKAGE_DIR` is the package directory inside that checkout, normally
-`gitnexus`. The API Docker build copies that source as a BuildKit named context,
-runs `npm ci` and `npm run build` inside Linux, then exposes the built package at
-`/opt/gitnexus` through `/usr/local/bin/gitnexus`. This builds the Linux GitNexus runtime inside the API image; it does not bind-mount host
-`node_modules`, so a Windows checkout cannot leak Windows native binaries into
-the Linux container.
+GitNexus source is vendored in `vendor/gitnexus-source`. A new machine only
+needs this repository; it does not need a separate GitNexus checkout and does
+not need to run `git clone` for GitNexus.
+
+Build the vendored GitNexus runtime image first:
+
+```powershell
+$env:GITNEXUS_PACKAGE_DIR='gitnexus'
+$env:GITNEXUS_RUNTIME_IMAGE='legacy-pilot-gitnexus-runtime:local'
+.\scripts\build-gitnexus-runtime.ps1
+```
+
+Equivalent Docker commands:
+
+```bash
+docker build -f Dockerfile.gitnexus-runtime \
+  --build-arg GITNEXUS_PACKAGE_DIR=gitnexus \
+  -t legacy-pilot-gitnexus-runtime:local .
+```
+
+`Dockerfile.gitnexus-runtime` builds the Linux GitNexus runtime in a separate image:
+it copies `vendor/gitnexus-source`, runs `npm ci` and `npm run build` inside
+Linux, verifies `dist/cli/index.js`, verifies `lbugjs.node` is a Linux ELF
+binary, and writes `/usr/local/bin/gitnexus`. `Dockerfile.api` then copies
+`/opt/gitnexus`, `/usr/local/bin/gitnexus`, and Node from that runtime image. The
+API image no longer needs `GITNEXUS_SOURCE_ROOT` or any host GitNexus checkout.
+
+To push the same runtime image to Alibaba Cloud ACR:
+
+```powershell
+$env:GITNEXUS_RUNTIME_IMAGE='registry.cn-hangzhou.aliyuncs.com/qwenhack/gitnexus-runtime:2026-07-03'
+.\scripts\build-gitnexus-runtime.ps1 -Push
+```
+
+Equivalent push command after a local build:
+
+```bash
+docker push registry.cn-hangzhou.aliyuncs.com/qwenhack/gitnexus-runtime:2026-07-03
+```
 
 Run the stack:
 
@@ -491,10 +522,10 @@ Smoke test:
 .\scripts\smoke-prod-compose.ps1 -TimeoutSeconds 240
 ```
 
-The smoke script fails loudly if the GitNexus source package is missing. It also
-verifies `/opt/gitnexus/dist/cli/index.js`, checks that the LadybugDB native
-module is a Linux ELF binary, runs a tiny real `gitnexus analyze` inside the API
-container, then checks same-origin API health through
+The smoke script fails loudly if `GITNEXUS_RUNTIME_IMAGE` is missing or still a
+placeholder. It verifies `/opt/gitnexus/dist/cli/index.js`, checks that the
+LadybugDB native module is a Linux ELF binary, runs a tiny real `gitnexus
+analyze` inside the API container, then checks same-origin API health through
 `http://127.0.0.1:8080/api/health`.
 
 Stop while keeping data:
@@ -515,11 +546,10 @@ Fast hackathon deployment:
 
 1. Create an Alibaba Cloud ECS instance with Docker and Docker Compose.
 2. Clone this repository on the ECS instance.
-3. Clone GitNexus source on the ECS instance at `/opt/legacy-pilot/GitNexus`.
+3. Build `legacy-pilot-gitnexus-runtime:local` from vendored `vendor/gitnexus-source`,
+   or pull the same runtime image from Alibaba Cloud ACR.
 4. Copy `.env.prod.example` to `.env.prod`.
-5. Set `DASHSCOPE_API_KEY`,
-   `GITNEXUS_SOURCE_ROOT=/opt/legacy-pilot/GitNexus`, and
-   `GITNEXUS_PACKAGE_DIR=gitnexus`.
+5. Set `DASHSCOPE_API_KEY` and `GITNEXUS_RUNTIME_IMAGE`.
 6. Run `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build`.
 7. Put Nginx, Caddy, or SLB in front of port `8080` and expose HTTPS only.
 
@@ -532,8 +562,9 @@ internal endpoint through a Compose override or ACK Secret.
 
 Production path:
 
-- Build `legacy-pilot-api` and `legacy-pilot-web` images in CI.
-- Push images to Alibaba Cloud ACR.
+- Build and push `gitnexus-runtime:<version>` when GitNexus changes.
+- Build `legacy-pilot-api` and `legacy-pilot-web` images in CI when LegacyPilot changes.
+- Push all images to Alibaba Cloud ACR.
 - Run `api` and `web` as ACK Deployments.
 - Use RDS PostgreSQL for graph payloads and incident memory.
 - Use SLB/Ingress for HTTPS.

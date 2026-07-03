@@ -21,15 +21,6 @@ function Read-EnvFile {
     return $values
 }
 
-function Resolve-EnvPath {
-    param([string]$PathValue)
-
-    if ([System.IO.Path]::IsPathRooted($PathValue)) {
-        return $PathValue
-    }
-    return [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $PathValue))
-}
-
 function Get-EnvValue {
     param(
         [hashtable]$EnvValues,
@@ -55,31 +46,18 @@ function Invoke-CheckedCommand {
     }
 }
 
-function Test-GitNexusBuildSource {
+function Test-GitNexusRuntimeImage {
     param([hashtable]$EnvValues)
 
-    $gitnexusSourceRoot = Get-EnvValue $EnvValues "GITNEXUS_SOURCE_ROOT"
-    if (-not $gitnexusSourceRoot) {
-        throw "GITNEXUS_SOURCE_ROOT is required in $EnvFile"
+    $runtimeImage = Get-EnvValue $EnvValues "GITNEXUS_RUNTIME_IMAGE"
+    if (-not $runtimeImage) {
+        throw "GITNEXUS_RUNTIME_IMAGE is required in $EnvFile"
+    }
+    if ($runtimeImage -match "replace-with-version") {
+        throw "GITNEXUS_RUNTIME_IMAGE must be pinned to a real runtime image tag."
     }
 
-    $packageDir = Get-EnvValue $EnvValues "GITNEXUS_PACKAGE_DIR"
-    if (-not $packageDir) {
-        $packageDir = "gitnexus"
-    }
-
-    $resolvedRoot = Resolve-EnvPath $gitnexusSourceRoot
-    $packageRoot = Join-Path $resolvedRoot $packageDir
-    $packageJson = Join-Path $packageRoot "package.json"
-    $packageLock = Join-Path $packageRoot "package-lock.json"
-    if (-not (Test-Path -LiteralPath $packageJson -PathType Leaf)) {
-        throw "GitNexus package.json not found: $packageJson"
-    }
-    if (-not (Test-Path -LiteralPath $packageLock -PathType Leaf)) {
-        throw "GitNexus package-lock.json not found for npm ci: $packageLock"
-    }
-
-    Write-Host "GitNexus build source preflight passed: $packageJson"
+    Write-Host "GitNexus runtime image configured: $runtimeImage"
 }
 
 if (-not (Test-Path -LiteralPath $ComposeFile)) {
@@ -91,7 +69,7 @@ if (-not (Test-Path -LiteralPath $EnvFile)) {
 }
 
 $envValues = Read-EnvFile $EnvFile
-Test-GitNexusBuildSource $envValues
+Test-GitNexusRuntimeImage $envValues
 
 $composeArgs = @("compose", "--env-file", $EnvFile, "-f", $ComposeFile)
 
