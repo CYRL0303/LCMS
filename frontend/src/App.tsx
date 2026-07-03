@@ -93,9 +93,11 @@ type WorkbenchSettings = {
   qwenApiKey: string;
   githubToken: string;
   gitlabToken: string;
+  webhookSecret: string;
 };
 
 type GraphListStatus = "idle" | "loading" | "failed";
+type AlertInputMode = "manual" | "local-log" | "webhook";
 
 const SETTINGS_STORAGE_KEY = "legacyPilot.workbench.settings.v1";
 
@@ -116,6 +118,7 @@ function emptyWorkbenchSettings(): WorkbenchSettings {
     qwenApiKey: "",
     githubToken: "",
     gitlabToken: "",
+    webhookSecret: "",
   };
 }
 
@@ -133,6 +136,7 @@ function loadWorkbenchSettings(): WorkbenchSettings {
       qwenApiKey: typeof parsed.qwenApiKey === "string" ? parsed.qwenApiKey : "",
       githubToken: typeof parsed.githubToken === "string" ? parsed.githubToken : "",
       gitlabToken: typeof parsed.gitlabToken === "string" ? parsed.gitlabToken : "",
+      webhookSecret: typeof parsed.webhookSecret === "string" ? parsed.webhookSecret : "",
     };
   } catch {
     return emptyWorkbenchSettings();
@@ -147,8 +151,9 @@ function saveWorkbenchSettings(settings: WorkbenchSettings) {
     qwenApiKey: settings.qwenApiKey.trim(),
     githubToken: settings.githubToken.trim(),
     gitlabToken: settings.gitlabToken.trim(),
+    webhookSecret: settings.webhookSecret.trim(),
   };
-  if (!next.qwenApiKey && !next.githubToken && !next.gitlabToken) {
+  if (!next.qwenApiKey && !next.githubToken && !next.gitlabToken && !next.webhookSecret) {
     window.localStorage.removeItem(SETTINGS_STORAGE_KEY);
     return;
   }
@@ -160,6 +165,7 @@ function runtimeCredentials(settings: WorkbenchSettings): RuntimeCredentials {
     qwenApiKey: settings.qwenApiKey.trim() || undefined,
     githubToken: settings.githubToken.trim() || undefined,
     gitlabToken: settings.gitlabToken.trim() || undefined,
+    webhookSecret: settings.webhookSecret.trim() || undefined,
   };
 }
 
@@ -186,6 +192,8 @@ export function App() {
   const [graphListError, setGraphListError] = useState<string | null>(null);
   const [graphDeleteTarget, setGraphDeleteTarget] = useState<StoredGraph | null>(null);
   const [graphDeleteRunning, setGraphDeleteRunning] = useState(false);
+  const [alertInputMode, setAlertInputMode] = useState<AlertInputMode>("manual");
+  const [localLogImportStatus, setLocalLogImportStatus] = useState<string | null>(null);
 
   useEffect(() => {
     void runHealth();
@@ -360,6 +368,63 @@ export function App() {
       "submit",
       request,
       () => postJson<IncidentQuery>("/v1/alerts/submit", request, apiOptions),
+      (data) => {
+        setIncidentQuery(data);
+        setAlertEvent((current) => ({
+          ...current,
+          repo_id: data.repo_id,
+          graph_id: data.graph_id || current.graph_id,
+        }));
+      },
+    );
+  }
+
+  async function importLocalLogFiles(files: FileList | null) {
+    if (!files || files.length === 0) {
+      return;
+    }
+    const selected = Array.from(files)
+      .filter((file) => /\.(log|txt|json)$/i.test(file.name))
+      .slice(0, 5);
+    if (selected.length === 0) {
+      setLocalLogImportStatus("No .log, .txt, or .json files selected.");
+      return;
+    }
+
+    const chunks = await Promise.all(
+      selected.map(async (file) => `===== ${file.name} =====\n${await file.text()}`),
+    );
+    const first = selected[0];
+    const importedText = chunks.join("\n\n").slice(0, 120_000);
+    setAlertEvent((current) => ({
+      ...current,
+      alert_id:
+        current.alert_id ||
+        `local-${first.name.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]+/g, "-")}`,
+      raw_log: importedText,
+      source: "local-log",
+      occurred_at: new Date(first.lastModified || Date.now()).toISOString(),
+    }));
+    setLocalLogImportStatus(`Imported ${selected.length} file(s).`);
+    clearPipelineAfter("index");
+  }
+
+  async function sendWebhookTest(): Promise<IncidentQuery | null> {
+    const path = genericWebhookPath(alertEvent);
+    const payload = {
+      id: alertEvent.alert_id.trim() || `webhook-test-${Date.now()}`,
+      source: "frontend-webhook-test",
+      message:
+        alertEvent.raw_log.trim() ||
+        "java.lang.IllegalStateException: frontend webhook test",
+      stack: alertEvent.stack_trace?.trim() || "",
+      title: alertEvent.error_description?.trim() || "Frontend webhook test",
+      timestamp: new Date().toISOString(),
+    };
+    return runStep<IncidentQuery>(
+      "submit",
+      { endpoint: path, payload },
+      () => postJson<IncidentQuery>(path, payload, apiOptions),
       (data) => {
         setIncidentQuery(data);
         setAlertEvent((current) => ({
@@ -681,8 +746,14 @@ export function App() {
             value={alertEvent}
             canSubmit={canSubmit}
             isSubmitting={isSubmittingAlert}
+            localLogImportStatus={localLogImportStatus}
+            mode={alertInputMode}
+            webhookUrl={`${apiBase}${genericWebhookPath(alertEvent)}`}
             onChange={setAlertField}
+            onImportLocalLogs={(files) => void importLocalLogFiles(files)}
+            onModeChange={setAlertInputMode}
             onSubmit={() => void runSubmitAlert()}
+            onWebhookTest={() => void sendWebhookTest()}
           />
           <SaveForm
             value={saveDraft}
@@ -1152,21 +1223,105 @@ function AlertForm({
   value,
   canSubmit,
   isSubmitting,
+  localLogImportStatus,
+  mode,
+  webhookUrl,
   onChange,
+  onImportLocalLogs,
+  onModeChange,
   onSubmit,
+  onWebhookTest,
 }: {
   value: AlertEvent;
   canSubmit: boolean;
   isSubmitting: boolean;
+  localLogImportStatus: string | null;
+  mode: AlertInputMode;
+  webhookUrl: string;
   onChange: (field: keyof AlertEvent, value: string) => void;
+  onImportLocalLogs: (files: FileList | null) => void;
+  onModeChange: (mode: AlertInputMode) => void;
   onSubmit: () => void;
+  onWebhookTest: () => void;
 }) {
+  const directoryPickerProps = {
+    type: "file",
+    multiple: true,
+    webkitdirectory: "",
+  } as const;
+
   return (
     <div className="form-block">
       <div className="block-title">
         <Activity aria-hidden="true" />
         <h3>Structure2 Alert</h3>
       </div>
+      <div className="segmented-control" aria-label="Alert input mode">
+        <button
+          className={mode === "manual" ? "active" : ""}
+          onClick={() => onModeChange("manual")}
+          type="button"
+        >
+          Manual
+        </button>
+        <button
+          className={mode === "local-log" ? "active" : ""}
+          onClick={() => onModeChange("local-log")}
+          type="button"
+        >
+          Import local log
+        </button>
+        <button
+          className={mode === "webhook" ? "active" : ""}
+          onClick={() => onModeChange("webhook")}
+          type="button"
+        >
+          Webhook
+        </button>
+      </div>
+      {mode === "local-log" && (
+        <div className="inline-panel">
+          <div className="two-col">
+            <label>
+              Log files
+              <input
+                accept=".log,.txt,.json,text/plain,application/json"
+                data-testid="local-log-file-input"
+                multiple
+                onChange={(event) => onImportLocalLogs(event.target.files)}
+                type="file"
+              />
+            </label>
+            <label>
+              Log folder
+              <input
+                {...directoryPickerProps}
+                accept=".log,.txt,.json,text/plain,application/json"
+                data-testid="local-log-folder-input"
+                onChange={(event) => onImportLocalLogs(event.target.files)}
+              />
+            </label>
+          </div>
+          {localLogImportStatus && <p className="field-help">{localLogImportStatus}</p>}
+        </div>
+      )}
+      {mode === "webhook" && (
+        <div className="inline-panel">
+          <label>
+            Webhook URL
+            <input data-testid="webhook-url-input" readOnly value={webhookUrl} />
+          </label>
+          <button
+            className="icon-button secondary"
+            disabled={!value.repo_id.trim() || isSubmitting}
+            onClick={onWebhookTest}
+            type="button"
+          >
+            <ButtonIcon icon={Activity} loading={isSubmitting} />
+            Send test webhook
+          </button>
+        </div>
+      )}
       <div className="two-col">
         <label>
           Alert ID
@@ -1606,6 +1761,25 @@ function SettingsModal({
               </button>
             </div>
           </section>
+
+          <section className="settings-section" aria-labelledby="webhook-settings-heading">
+            <div className="block-title">
+              <Activity aria-hidden="true" />
+              <h3 id="webhook-settings-heading">Webhook</h3>
+            </div>
+            <label>
+              Secret
+              <input
+                autoComplete="off"
+                data-testid="webhook-secret-input"
+                onChange={(event) => update("webhookSecret", event.target.value)}
+                placeholder="dev-secret"
+                type="password"
+                value={value.webhookSecret}
+              />
+            </label>
+            <ConnectionState connected={Boolean(value.webhookSecret.trim())} />
+          </section>
         </div>
         <div className="settings-actions">
           <button className="icon-button secondary" onClick={onClear}>
@@ -1898,6 +2072,16 @@ function normalizeAlertEvent(alert: AlertEvent): AlertEvent {
     normalized.error_description = alert.error_description;
   }
   return normalized;
+}
+
+function genericWebhookPath(alert: AlertEvent): string {
+  const params = new URLSearchParams();
+  params.set("repo_id", alert.repo_id.trim());
+  if (alert.graph_id?.trim()) {
+    params.set("graph_id", alert.graph_id.trim());
+  }
+  params.set("contract_version", alert.contract_version.trim());
+  return `/v1/alerts/webhook/generic?${params.toString()}`;
 }
 
 function unpackError(error: unknown): {

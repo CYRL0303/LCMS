@@ -171,8 +171,17 @@ $env:LEGACY_PILOT_RCA_BASE_URL='https://dashscope-intl.aliyuncs.com/compatible-m
 $env:LEGACY_PILOT_RCA_MODEL='qwen-plus'
 $env:LEGACY_PILOT_RCA_CONFIDENCE_CAP='0.75'
 $env:LEGACY_PILOT_RCA_REPAIR_ATTEMPTS='2'
+$env:LEGACY_PILOT_RCA_TIMEOUT_SECONDS='120'
+$env:LEGACY_PILOT_RCA_TRANSPORT_RETRIES='1'
+$env:LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS='1'
 $env:DASHSCOPE_API_KEY='<set outside git>'
 ```
+
+Qwen adapter 会对无效 JSON/schema 做有限 repair retry；transport timeout 单独处理。
+`LEGACY_PILOT_RCA_TIMEOUT_SECONDS` 控制 DashScope read timeout，
+`LEGACY_PILOT_RCA_TRANSPORT_RETRIES` 控制 timeout/临时 transport 失败重试次数，
+`LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS` 控制指数 backoff。重试耗尽后返回
+recoverable contract error，不再冒成裸 HTTP 500。
 
 持久化 Qwen key 到 Windows User env：
 
@@ -260,6 +269,23 @@ http://127.0.0.1:5173
 - 远端仓库：在 `Repo URI` 输入 GitHub/GitLab HTTPS URL；私有仓库先在 Settings 填 token。
 - 已有 graph：在 `Existing graphs` 选择 graph，点 `Use existing graph`，填 `Alert ID` 和 `Raw log`，点 `Run full pipeline`。
 
+Structure2 alert 输入支持三种模式：
+
+- `Manual`：手动粘贴 `Raw log`、`Stack trace`、`Error description`。
+- `Import local log`：选择本地 `.log`、`.txt`、`.json` 文件或日志目录；浏览器读取文件并填入 `AlertEvent.raw_log`，后端不会读取用户电脑上的本地路径。
+- `Webhook`：监控系统向 middleware 推送 generic JSON alert；后端 normalize 成 `AlertEvent`，再走同一条 `SubmitAlert -> BuildEvidenceBundle -> RCA` 链路。
+
+Generic webhook 示例：
+
+```bash
+curl -X POST "http://127.0.0.1:8080/api/v1/alerts/webhook/generic?repo_id=ibm-demo&graph_id=GRAPH-..." \
+  -H "Content-Type: application/json" \
+  -H "X-LegacyPilot-Webhook-Secret: dev-secret" \
+  -d '{"id":"alert-1","source":"grafana","message":"NullPointerException at BookController.java:31","title":"Book API failed"}'
+```
+
+生产环境设置 `LEGACY_PILOT_WEBHOOK_SECRET` 后，webhook 必须带 `X-LegacyPilot-Webhook-Secret` header。本地开发可留空。
+
 Settings modal 把 Qwen API key、GitHub/GitLab token 存在浏览器 localStorage。Frontend 不直接调用 GitNexus、PostgreSQL、DashScope、GitHub、GitLab；只转发 credentials 到 middleware headers。
 
 ## Dockerized deployment
@@ -290,6 +316,10 @@ DASHSCOPE_API_KEY=
 GITNEXUS_SOURCE_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main
 GITNEXUS_PACKAGE_DIR=gitnexus
 GITNEXUS_CYPHER_RETRY_EDGE_LIMIT=100
+LEGACY_PILOT_RCA_TIMEOUT_SECONDS=120
+LEGACY_PILOT_RCA_TRANSPORT_RETRIES=1
+LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS=1
+LEGACY_PILOT_WEBHOOK_SECRET=
 ```
 
 `GITNEXUS_SOURCE_ROOT` 必须指向真实 GitNexus 源码 checkout。
@@ -375,6 +405,7 @@ Hackathon demo 可用 compose 内 PostgreSQL + ECS cloud disk。产品数据建�
 - `GET /v1/graphs`
 - `DELETE /v1/graphs/{repo_id}/{graph_id}`
 - `POST /v1/alerts/submit`
+- `POST /v1/alerts/webhook/generic`
 - `POST /v1/evidence-bundles/build`
 - `POST /v1/incidents/similar`
 - `GET /v1/incidents/{incident_id}`

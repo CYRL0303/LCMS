@@ -66,11 +66,13 @@ def test_parse_alert_event_extracts_java_exception_location_and_endpoint():
     assert signals.file_path == "DatasetService.java"
     assert signals.line_number == 42
     assert signals.endpoint == "/api/dataset/version"
-    assert signals.query_terms == [
+    assert signals.query_terms[:3] == [
         "NullPointerException",
         "DatasetService.getVersion",
         "/api/dataset/version",
     ]
+    for term in ["DatasetService", "Dataset"]:
+        assert term in signals.query_terms
 
 
 def test_parse_alert_event_extracts_slow_query_signal():
@@ -97,11 +99,12 @@ def test_parse_alert_event_trims_endpoint_trailing_punctuation():
     )
 
     assert signals.endpoint == "/api/dataset/version"
-    assert signals.query_terms == [
+    assert signals.query_terms[:3] == [
         "NullPointerException",
         "DatasetService.getVersion",
         "/api/dataset/version",
     ]
+    assert "DatasetService" in signals.query_terms
 
 
 def test_parse_alert_event_detects_slow_query_case_insensitively():
@@ -183,6 +186,34 @@ def test_parse_alert_event_extracts_natural_language_code_terms_for_graph_query(
     ]
     assert "BookInfoRepository" in graph_query.query_terms
     assert "copiesAvailable" in graph_query.query_terms
+
+
+def test_parse_alert_event_keeps_broad_code_terms_when_stack_frame_exists():
+    signals = parse_alert_event(
+        alert_event(
+            raw_log=(
+                "org.springframework.dao.BadSqlGrammarException: failed query "
+                "for BookInfoRepository and BookInfoService at /api/books/search"
+            ),
+            stack_trace=(
+                "at com.example.demo.controller.BookInfoController.searchBooks"
+                "(BookInfoController.java:88)"
+            ),
+            error_description="Book search failed for BookInfo records.",
+        )
+    )
+
+    assert signals.error_type == "BadSqlGrammarException"
+    assert signals.suspected_location == "BookInfoController.searchBooks"
+    for term in [
+        "BookInfoController.searchBooks",
+        "BookInfoController",
+        "BookInfoRepository",
+        "BookInfoService",
+        "BookInfo",
+        "Book",
+    ]:
+        assert term in signals.query_terms
 
 
 def test_incident_context_factory_defaults_to_graph_context(monkeypatch):
@@ -361,11 +392,13 @@ def test_graph_backed_adapter_queries_graph_and_builds_bundle():
     bundle = adapter.build_evidence_bundle(query)
 
     assert calls[0].graph_id == "GRAPH-repo-demo"
-    assert calls[0].query_terms == [
+    assert calls[0].query_terms[:3] == [
         "/api/dataset/version",
         "DatasetService.getVersion",
         "NullPointerException",
     ]
+    for term in ["DatasetService", "Dataset"]:
+        assert term in calls[0].query_terms
     assert bundle.matched_nodes[0].name == "DatasetService.getVersion"
     assert bundle.code_evidence == [code]
 
@@ -444,7 +477,7 @@ def test_graph_backed_adapter_retries_low_recall_and_merges_evidence():
 
     assert len(calls) == 2
     assert calls[1].max_depth > calls[0].max_depth
-    assert "DatasetMapper.selectVersionById" in calls[1].query_terms
+    assert "DatasetMapper" in calls[1].query_terms
     assert [ref.evidence_id for ref in bundle.code_evidence] == [
         "EV-CODE-FIRST",
         "EV-CODE-RECALL",
@@ -456,3 +489,128 @@ def test_graph_backed_adapter_retries_low_recall_and_merges_evidence():
         ]
     ]
     assert bundle.missing_evidence == []
+
+
+def test_low_recall_retry_uses_broad_terms_instead_of_noisy_stack_terms():
+    calls = []
+    recalled = evidence_ref("EV-CODE-BOOK", "code", "BookInfoService.java")
+
+    def query_graph(graph_query):
+        calls.append(graph_query)
+        if len(calls) == 1:
+            return GraphContext(
+                trace_id=graph_query.trace_id,
+                matched_nodes=[],
+                matched_edges=[],
+                graph_paths=[],
+                evidence_refs=[],
+                confidence=0.0,
+            )
+        return GraphContext(
+            trace_id=graph_query.trace_id,
+            matched_nodes=[
+                Node(
+                    node_id="File:BookInfoService.java",
+                    graph_id=graph_query.graph_id,
+                    repo_id=graph_query.repo_id,
+                    type="File",
+                    name="BookInfoService.java",
+                    evidence_refs=[recalled],
+                )
+            ],
+            matched_edges=[],
+            graph_paths=[["BookInfoController.java", "BookInfoService.java"]],
+            evidence_refs=[recalled],
+            confidence=0.8,
+        )
+
+    adapter = GraphBackedIncidentContextBuilderAdapter(
+        query_graph=query_graph,
+        find_similar_incidents=lambda query: [],
+    )
+
+    bundle = adapter.build_evidence_bundle(
+        IncidentQuery(
+            trace_id="TRACE-BOOK-001",
+            repo_id="ibm-demo",
+            graph_id="GRAPH-ibm-demo",
+            error_type="BadSqlGrammarException",
+            suspected_location="BookMapper.selectAvailableBooks",
+            endpoint="/api/books/search",
+            keywords=["book"],
+            query_terms=[
+                "BadSqlGrammarException",
+                "BookMapper.selectAvailableBooks",
+                "/api/books/search",
+                "book",
+                "BookController",
+                "SQLSyntaxErrorException",
+                "PreparedStatementHandler",
+                "DispatcherServlet.doDispatch",
+                "Book",
+                "Prepared",
+            ],
+            contract_version="1.0.0",
+        )
+    )
+
+    assert len(calls) == 2
+    for term in ["Book", "book", "BookController", "BookMapper"]:
+        assert term in calls[1].query_terms
+    for noisy in [
+        "/api/books/search",
+        "BadSqlGrammarException",
+        "PreparedStatementHandler",
+        "DispatcherServlet",
+    ]:
+        assert noisy not in calls[1].query_terms
+    assert bundle.code_evidence == [recalled]
+    assert bundle.missing_evidence == []
+
+
+def test_low_recall_retry_ranks_repeated_domain_roots_first():
+    calls = []
+
+    def query_graph(graph_query):
+        calls.append(graph_query)
+        return GraphContext(
+            trace_id=graph_query.trace_id,
+            matched_nodes=[],
+            matched_edges=[],
+            graph_paths=[],
+            evidence_refs=[],
+            confidence=0.0,
+        )
+
+    adapter = GraphBackedIncidentContextBuilderAdapter(
+        query_graph=query_graph,
+        find_similar_incidents=lambda query: [],
+    )
+
+    adapter.build_evidence_bundle(
+        IncidentQuery(
+            trace_id="TRACE-LOGIN-001",
+            repo_id="ibm-demo",
+            graph_id="GRAPH-ibm-demo",
+            error_type="NullPointerException",
+            suspected_location="LoginController.login",
+            endpoint="/api/login",
+            keywords=[],
+            query_terms=[
+                "NullPointerException",
+                "LoginController.login",
+                "/api/login",
+                "LoginController",
+                "UserService",
+                "User.getPassword",
+                "UserService.checkPassword",
+                "UserService.login",
+                "Login",
+                "User",
+            ],
+            contract_version="1.0.0",
+        )
+    )
+
+    assert len(calls) == 2
+    assert calls[1].query_terms[:2] == ["User", "Login"]

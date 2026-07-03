@@ -1,0 +1,35 @@
+2026-07-03 09:27:11.902 ERROR 24608 --- [nio-8080-exec-7] c.l.ibm.controller.BookController        : Request failed: GET /api/books/search?keyword=database&status=AVAILABLE
+
+org.springframework.jdbc.BadSqlGrammarException:
+### Error querying database.  Cause: java.sql.SQLSyntaxErrorException: Unknown column 'is_deleted' in 'field list'
+### The error may exist in mapper/BookMapper.xml
+### The error may involve com.lsdaer.ibm.mapper.BookMapper.selectAvailableBooks-Inline
+### The error occurred while setting parameters
+### SQL: SELECT id, book_name, author, category, status, is_deleted FROM book WHERE status = ? AND book_name LIKE CONCAT('%', ?, '%') ORDER BY create_time DESC
+### Cause: java.sql.SQLSyntaxErrorException: Unknown column 'is_deleted' in 'field list'
+	at com.lsdaer.ibm.mapper.BookMapper.selectAvailableBooks(BookMapper.java:21)
+	at com.lsdaer.ibm.service.BookService.searchAvailableBooks(BookService.java:88)
+	at com.lsdaer.ibm.controller.BookController.search(BookController.java:57)
+	at jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+	at jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.lang.reflect.Method.invoke(Method.java:566)
+	at org.springframework.web.method.support.InvocableHandlerMethod.doInvoke(InvocableHandlerMethod.java:205)
+	at org.springframework.web.method.support.InvocableHandlerMethod.invokeForRequest(InvocableHandlerMethod.java:150)
+	at org.springframework.web.servlet.mvc.method.annotation.ServletInvocableHandlerMethod.invokeAndHandle(ServletInvocableHandlerMethod.java:117)
+	at org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.invokeHandlerMethod(RequestMappingHandlerAdapter.java:895)
+	at org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.handleInternal(RequestMappingHandlerAdapter.java:808)
+	at org.springframework.web.servlet.mvc.method.AbstractHandlerMethodAdapter.handle(AbstractHandlerMethodAdapter.java:87)
+	at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1072)
+	at org.springframework.web.servlet.DispatcherServlet.doService(DispatcherServlet.java:965)
+	at org.springframework.web.servlet.FrameworkServlet.processRequest(FrameworkServlet.java:1006)
+Caused by: java.sql.SQLSyntaxErrorException: Unknown column 'is_deleted' in 'field list'
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:120)
+	at com.mysql.cj.jdbc.ClientPreparedStatement.executeInternal(ClientPreparedStatement.java:916)
+	at com.mysql.cj.jdbc.ClientPreparedStatement.execute(ClientPreparedStatement.java:354)
+	at com.zaxxer.hikari.pool.ProxyPreparedStatement.execute(ProxyPreparedStatement.java:44)
+	at org.apache.ibatis.executor.statement.PreparedStatementHandler.query(PreparedStatementHandler.java:64)
+	... 16 common frames omitted
+
+Business action: librarian searches available books from table book through BookService.searchAvailableBooks.
+Suggested graph terms: BookMapper.selectAvailableBooks, BookService.searchAvailableBooks, BookController.search, book, /api/books/search

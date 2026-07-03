@@ -1,7 +1,12 @@
+import os
+from datetime import UTC, datetime
+from typing import Any
+
 from fastapi import FastAPI, Header
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from legacy_pilot.alert_intake.normalizer import normalize_generic_webhook_payload
 from legacy_pilot.contracts.enums import ErrorCode
 from legacy_pilot.contracts.errors import ContractError, ContractViolation
 from legacy_pilot.contracts.models import (
@@ -40,6 +45,20 @@ def _runtime_credentials_from_headers(
         github_token=clean_secret(github_token),
         gitlab_token=clean_secret(gitlab_token),
     )
+
+
+def _ensure_webhook_secret(actual_secret: str | None) -> None:
+    expected_secret = os.environ.get("LEGACY_PILOT_WEBHOOK_SECRET", "").strip()
+    if expected_secret and actual_secret != expected_secret:
+        raise ContractViolation(
+            ContractError(
+                trace_id=None,
+                error_code=ErrorCode.AUTHENTICATION_ERROR,
+                message="Webhook secret is missing or invalid.",
+                source_module="alert_intake",
+                recoverable=True,
+            )
+        )
 
 
 def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
@@ -125,6 +144,27 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
 
     @app.post("/v1/alerts/submit", response_model=IncidentQuery)
     async def submit_alert(alert: AlertEvent) -> IncidentQuery:
+        return middleware_router.submit_alert(alert)
+
+    @app.post("/v1/alerts/webhook/generic", response_model=IncidentQuery)
+    async def submit_generic_webhook(
+        payload: dict[str, Any],
+        repo_id: str,
+        graph_id: str | None = None,
+        contract_version: str = SUPPORTED_CONTRACT_VERSION,
+        webhook_secret: str | None = Header(
+            default=None,
+            alias="X-LegacyPilot-Webhook-Secret",
+        ),
+    ) -> IncidentQuery:
+        _ensure_webhook_secret(webhook_secret)
+        alert = normalize_generic_webhook_payload(
+            payload,
+            repo_id=repo_id,
+            graph_id=graph_id,
+            contract_version=contract_version,
+            now=datetime.now(UTC),
+        )
         return middleware_router.submit_alert(alert)
 
     @app.post("/v1/evidence-bundles/build", response_model=EvidenceBundle)

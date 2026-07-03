@@ -27,6 +27,7 @@ export interface RuntimeCredentials {
   qwenApiKey?: string;
   githubToken?: string;
   gitlabToken?: string;
+  webhookSecret?: string;
 }
 
 export interface ApiCallOptions {
@@ -104,6 +105,10 @@ function requestHeaders(
   }
   if (credentials?.gitlabToken) {
     headers.set("X-LegacyPilot-GitLab-Token", credentials.gitlabToken);
+    hasHeaders = true;
+  }
+  if (credentials?.webhookSecret) {
+    headers.set("X-LegacyPilot-Webhook-Secret", credentials.webhookSecret);
     hasHeaders = true;
   }
   return hasHeaders ? headers : undefined;

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -11,7 +12,7 @@ const SETTINGS_STORAGE_KEY = "legacyPilot.workbench.settings.v1";
 
 test("runs the real four-structure incident pipeline from the workbench", async ({
   page,
-}) => {
+}, testInfo) => {
   const currentDir = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.resolve(currentDir, "..", "..");
   const fixtureRoot = path.join(
@@ -42,6 +43,7 @@ test("runs the real four-structure incident pipeline from the workbench", async 
   await page.getByTestId("qwen-api-key-input").fill("sk-local-ui-test");
   await page.getByTestId("github-token-input").fill("github_pat_local_ui_test");
   await page.getByTestId("gitlab-token-input").fill("glpat-local-ui-test");
+  await page.getByTestId("webhook-secret-input").fill("webhook-local-ui-test");
   await page.getByTestId("settings-modal").getByRole("button", { name: /^Save$/ }).click();
   await expect(page.getByTestId("settings-modal")).toBeHidden();
   await page.reload();
@@ -49,6 +51,7 @@ test("runs the real four-structure incident pipeline from the workbench", async 
   await expect(page.getByTestId("qwen-api-key-input")).toHaveValue("sk-local-ui-test");
   await expect(page.getByTestId("github-token-input")).toHaveValue("github_pat_local_ui_test");
   await expect(page.getByTestId("gitlab-token-input")).toHaveValue("glpat-local-ui-test");
+  await expect(page.getByTestId("webhook-secret-input")).toHaveValue("webhook-local-ui-test");
   await page.getByTestId("settings-modal").getByRole("button", { name: /^Clear$/ }).click();
   await page.getByTestId("settings-modal").getByRole("button", { name: /^Save$/ }).click();
 
@@ -61,6 +64,21 @@ test("runs the real four-structure incident pipeline from the workbench", async 
   });
   await expect(page.getByTestId("snapshot-summary")).toContainText("nodes");
 
+  const logPath = testInfo.outputPath("sample-incident.log");
+  await fs.promises.writeFile(
+    logPath,
+    "java.lang.IllegalStateException: Failed to create BookController\nat BookController.list(BookController.java:31)\n",
+    "utf8",
+  );
+  await page.getByRole("button", { name: "Import local log" }).click();
+  await page.setInputFiles('[data-testid="local-log-file-input"]', logPath);
+  await expect(page.getByTestId("raw-log-input")).toHaveValue(/IllegalStateException/);
+  await expect(page.getByTestId("alert-id-input")).toHaveValue(/local-sample-incident/);
+
+  await page.getByRole("button", { name: "Webhook" }).click();
+  await expect(page.getByTestId("webhook-url-input")).toHaveValue(/\/v1\/alerts\/webhook\/generic/);
+
+  await page.getByRole("button", { name: "Manual" }).click();
   await page.getByTestId("alert-id-input").fill("ALERT-FRONTEND-E2E");
   await page.getByTestId("raw-log-input").fill(
     "java.lang.NullPointerException: Cannot invoke getDatasetId at DatasetService.getVersion(DatasetService.java:42). Hit /api/dataset/version.",

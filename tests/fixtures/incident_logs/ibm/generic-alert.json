@@ -1,0 +1,16 @@
+{
+  "id": "ibm-webhook-borrow-001",
+  "source": "generic-webhook-fixture",
+  "severity": "critical",
+  "service": "intelligent-book-management-system",
+  "title": "Borrow book workflow failed",
+  "message": "org.springframework.dao.DataIntegrityViolationException: PreparedStatementCallback; SQL [insert into borrow_record (book_id, user_id, borrow_time, return_time) values (?, ?, ?, ?)]; Duplicate entry '1003-2007' for key 'uk_book_user_open_borrow'. Endpoint POST /api/books/borrow/1003 while creating a borrow record.",
+  "stack_trace": "at com.lsdaer.ibm.service.BookService.borrowBook(BookService.java:142)\nat com.lsdaer.ibm.controller.BookController.borrow(BookController.java:76)\nat org.springframework.web.method.support.InvocableHandlerMethod.doInvoke(InvocableHandlerMethod.java:205)\nat org.springframework.web.servlet.mvc.method.annotation.ServletInvocableHandlerMethod.invokeAndHandle(ServletInvocableHandlerMethod.java:117)",
+  "raw_log": "org.springframework.dao.DataIntegrityViolationException: PreparedStatementCallback; SQL [insert into borrow_record (book_id, user_id, borrow_time, return_time) values (?, ?, ?, ?)]; Duplicate entry '1003-2007' for key 'uk_book_user_open_borrow'. Endpoint POST /api/books/borrow/1003 while creating a borrow record.",
+  "occurred_at": "2026-07-03T10:21:32Z",
+  "labels": {
+    "endpoint": "/api/books/borrow/1003",
+    "business_action": "borrow book",
+    "repo": "Lsdaer-1/Intelligent-Book-Management-System"
+  }
+}

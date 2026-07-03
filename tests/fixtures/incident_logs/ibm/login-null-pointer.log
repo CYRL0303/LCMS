@@ -1,0 +1,23 @@
+2026-07-03 10:03:45.317 ERROR 24608 --- [nio-8080-exec-3] c.l.ibm.controller.LoginController       : Login request failed for endpoint POST /api/login
+
+java.lang.NullPointerException: Cannot invoke "com.lsdaer.ibm.entity.User.getPassword()" because "user" is null
+	at com.lsdaer.ibm.controller.LoginController.login(LoginController.java:58)
+	at com.lsdaer.ibm.service.UserService.checkPassword(UserService.java:73)
+	at com.lsdaer.ibm.service.UserService.login(UserService.java:49)
+	at jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+	at jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.lang.reflect.Method.invoke(Method.java:566)
+	at org.springframework.web.method.support.InvocableHandlerMethod.doInvoke(InvocableHandlerMethod.java:205)
+	at org.springframework.web.method.support.InvocableHandlerMethod.invokeForRequest(InvocableHandlerMethod.java:150)
+	at org.springframework.web.servlet.mvc.method.annotation.ServletInvocableHandlerMethod.invokeAndHandle(ServletInvocableHandlerMethod.java:117)
+	at org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.invokeHandlerMethod(RequestMappingHandlerAdapter.java:895)
+	at org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.handleInternal(RequestMappingHandlerAdapter.java:808)
+	at org.springframework.web.servlet.mvc.method.AbstractHandlerMethodAdapter.handle(AbstractHandlerMethodAdapter.java:87)
+	at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1072)
+	at org.springframework.web.servlet.DispatcherServlet.doService(DispatcherServlet.java:965)
+	at org.springframework.web.servlet.FrameworkServlet.processRequest(FrameworkServlet.java:1006)
+
+Request context: username=student01, rememberMe=false, remoteAddr=10.8.12.41
+Business action: user login validation through LoginController.login and UserService.checkPassword.
+Suggested graph terms: LoginController.login, UserService.checkPassword, UserService.login, /api/login

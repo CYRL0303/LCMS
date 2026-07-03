@@ -57,6 +57,9 @@ def test_prod_env_example_documents_real_backends_without_localhost_dsns():
     assert env_values["LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND"] == "graph_context"
     assert env_values["LEGACY_PILOT_INCIDENT_MEMORY_BACKEND"] == "postgresql"
     assert env_values["LEGACY_PILOT_RCA_BACKEND"] == "qwen_api"
+    assert env_values["LEGACY_PILOT_RCA_TIMEOUT_SECONDS"] == "120"
+    assert env_values["LEGACY_PILOT_RCA_TRANSPORT_RETRIES"] == "1"
+    assert env_values["LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS"] == "1"
     assert env_values["DASHSCOPE_API_KEY"] == ""
     assert "127.0.0.1" not in (ROOT / ".env.prod.example").read_text(
         encoding="utf-8"
@@ -143,6 +146,15 @@ def test_prod_compose_defines_real_web_api_postgres_stack():
     assert api["environment"]["LEGACY_PILOT_GRAPH_STORE_BACKEND"] == "postgresql"
     assert api["environment"]["LEGACY_PILOT_INCIDENT_MEMORY_BACKEND"] == "postgresql"
     assert api["environment"]["LEGACY_PILOT_RCA_BACKEND"] == "qwen_api"
+    assert api["environment"]["LEGACY_PILOT_RCA_TIMEOUT_SECONDS"] == (
+        "${LEGACY_PILOT_RCA_TIMEOUT_SECONDS:-120}"
+    )
+    assert api["environment"]["LEGACY_PILOT_RCA_TRANSPORT_RETRIES"] == (
+        "${LEGACY_PILOT_RCA_TRANSPORT_RETRIES:-1}"
+    )
+    assert api["environment"]["LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS"] == (
+        "${LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS:-1}"
+    )
     assert api["environment"]["LEGACY_PILOT_REPO_IMPORT_ROOT"] == "/var/lib/legacy-pilot/repos"
     assert api["expose"] == ["8000"]
     assert "ports" not in api

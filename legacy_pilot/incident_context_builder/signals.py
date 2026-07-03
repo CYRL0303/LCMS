@@ -17,6 +17,7 @@ JAVA_CLASS_RE = re.compile(
     r"Client|Handler|Manager|Processor|Exception|Error|Info|Entity|Model|DTO|Dto)\b"
 )
 CAMEL_TOKEN_RE = re.compile(r"\b[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b")
+PASCAL_PART_RE = re.compile(r"[A-Z][a-z0-9]*")
 ENDPOINT_RE = re.compile(r"(?P<endpoint>/api/[A-Za-z0-9_./{}-]+)")
 JAVA_ERROR_TYPE_RE = re.compile(
     r"\b(?:[a-z_][\w$]*\.)+(?P<error>[A-Z][A-Za-z0-9_$]*(?:Exception|Error))\b"
@@ -75,9 +76,7 @@ def parse_alert_event(alert: AlertEvent) -> IncidentSignals:
         symbol = JAVA_SYMBOL_RE.search(text)
         if symbol:
             suspected_location = f"{symbol.group('class')}.{symbol.group('method')}"
-    keyword_candidates = [table]
-    if not frame:
-        keyword_candidates.extend(_java_code_terms(text))
+    keyword_candidates = [table, *_java_code_terms(text)]
     keywords = _dedupe([value for value in keyword_candidates if value])
     query_terms = _dedupe(
         [
@@ -152,9 +151,18 @@ def _java_domain_terms(class_terms: list[str]) -> list[str]:
     for term in class_terms:
         for suffix in JAVA_ROLE_SUFFIXES:
             if term.endswith(suffix) and len(term) > len(suffix):
-                domains.append(term[: -len(suffix)])
+                domain = term[: -len(suffix)]
+                domains.append(domain)
+                domains.extend(_pascal_domain_terms(domain))
                 break
     return domains
+
+
+def _pascal_domain_terms(value: str) -> list[str]:
+    parts = PASCAL_PART_RE.findall(value)
+    if len(parts) <= 1:
+        return []
+    return [parts[0]]
 
 
 def _first_match(pattern: re.Pattern[str], text: str, group_name: str) -> str | None:

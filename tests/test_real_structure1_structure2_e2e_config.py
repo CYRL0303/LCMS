@@ -32,6 +32,9 @@ REQUIRED_ENV_KEYS = {
     "LEGACY_PILOT_RCA_MODEL",
     "LEGACY_PILOT_RCA_CONFIDENCE_CAP",
     "LEGACY_PILOT_RCA_REPAIR_ATTEMPTS",
+    "LEGACY_PILOT_RCA_TIMEOUT_SECONDS",
+    "LEGACY_PILOT_RCA_TRANSPORT_RETRIES",
+    "LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS",
     "DASHSCOPE_API_KEY",
     "GITNEXUS_BIN",
     "GITNEXUS_REPO_ROOT",
@@ -51,6 +54,9 @@ def test_env_example_documents_real_structure1_structure2_e2e_variables():
     assert env_values["LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND"] == "graph_context"
     assert env_values["LEGACY_PILOT_INCIDENT_MEMORY_BACKEND"] == "postgresql"
     assert env_values["LEGACY_PILOT_RCA_BACKEND"] == "qwen_api"
+    assert env_values["LEGACY_PILOT_RCA_TIMEOUT_SECONDS"] == "120"
+    assert env_values["LEGACY_PILOT_RCA_TRANSPORT_RETRIES"] == "1"
+    assert env_values["LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS"] == "1"
     assert "127.0.0.1:55432" in env_values["LEGACY_PILOT_GRAPH_STORE_DSN"]
 
 
@@ -91,6 +97,9 @@ def test_real_e2e_script_starts_postgres_and_runs_real_chain():
     assert "LEGACY_PILOT_INCIDENT_MEMORY_DSN" in script
     assert "LEGACY_PILOT_INCIDENT_MEMORY_TABLE" in script
     assert "LEGACY_PILOT_RCA_REPAIR_ATTEMPTS" in script
+    assert "LEGACY_PILOT_RCA_TIMEOUT_SECONDS" in script
+    assert "LEGACY_PILOT_RCA_TRANSPORT_RETRIES" in script
+    assert "LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS" in script
     assert "qwen_api" in script
     assert "tests/test_real_structure1_structure2_e2e.py" in script
     assert "sk-" not in script
@@ -104,6 +113,9 @@ def test_real_frontend_e2e_script_uses_port_scoped_log_files():
     assert '"uvicorn.frontend-e2e.$BackendPort.err.log"' in script
     assert '"vite.frontend-e2e.$FrontendPort.out.log"' in script
     assert '"vite.frontend-e2e.$FrontendPort.err.log"' in script
+    assert "LEGACY_PILOT_RCA_TIMEOUT_SECONDS" in script
+    assert "LEGACY_PILOT_RCA_TRANSPORT_RETRIES" in script
+    assert "LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS" in script
 
 
 def test_qwen_env_script_persists_user_env_and_optional_local_env_file():

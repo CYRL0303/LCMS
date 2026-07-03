@@ -204,6 +204,7 @@ Incident Context Builder 负责把报警、日志、stack trace 或错误描述�
 
 - 结构2拥有独立 `IncidentContextBuilderAdapter`。
 - `SubmitAlert` 解析 raw log、stack trace、error_description，输出 `IncidentQuery`。
+- Local log import 和 webhook 都是 Structure2 前置 alert intake。它们必须先 normalize 成 `AlertEvent`，再进入 `SubmitAlert`，不能绕过中间件契约。
 - `BuildEvidenceBundle` 通过 `GraphQuery` 请求结构1，消费 `GraphContext` 并组装 `EvidenceBundle`。
 - graph version 由可选 `graph_id` 控制；缺省时回退 `GRAPH-{repo_id}`。
 
@@ -291,6 +292,14 @@ Reviewer Agent
 - 不直接读取源代码文件。
 - 不直接写入 incident memory。
 - 不自动修改生产代码。
+
+### 5.4.1 运行时边界
+
+- 默认实现是真实 DashScope Qwen `qwen_api`，不是 mock。
+- `LEGACY_PILOT_RCA_TIMEOUT_SECONDS` 控制 Qwen HTTP read timeout。
+- `LEGACY_PILOT_RCA_TRANSPORT_RETRIES` 控制 timeout、临时网络错误和 retryable HTTP response 的重试次数。
+- `LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS` 控制指数 backoff 的基础秒数。
+- transport retry 耗尽后必须返回 recoverable `rca_reasoning_engine` contract error，不允许冒成未处理 HTTP 500。
 
 ### 5.5 核心输入
 

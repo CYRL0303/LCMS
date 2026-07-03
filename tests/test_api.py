@@ -180,6 +180,17 @@ def qwen_rca_adapter_with_unknown_evidence() -> QwenApiRCAReasoningEngineAdapter
     return QwenApiRCAReasoningEngineAdapter(api_key="test-key", http_post=fake_post)
 
 
+def qwen_rca_adapter_that_times_out() -> QwenApiRCAReasoningEngineAdapter:
+    def fake_post(url, headers, body):
+        raise TimeoutError("The read operation timed out")
+
+    return QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+        transport_retry_backoff_seconds=0,
+    )
+
+
 def test_health_endpoint_exposes_middleware_identity():
     client = TestClient(create_app())
 
@@ -219,6 +230,51 @@ def test_submit_alert_endpoint_preserves_optional_graph_id():
     assert response.json()["graph_id"] == "GRAPH-repo-demo"
 
 
+def test_generic_webhook_normalizes_payload_into_incident_query():
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/v1/alerts/webhook/generic",
+        params={"repo_id": "repo-demo", "graph_id": "GRAPH-DEMO"},
+        json={
+            "id": "grafana-alert-1",
+            "source": "grafana",
+            "message": (
+                "java.lang.NullPointerException at "
+                "DatasetService.getVersion(DatasetService.java:42)"
+            ),
+            "stack": "DatasetService.getVersion(DatasetService.java:42)",
+            "title": "Dataset version endpoint failed",
+            "timestamp": "2026-07-01T16:00:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["repo_id"] == "repo-demo"
+    assert body["graph_id"] == "GRAPH-DEMO"
+    assert body["trace_id"] == "TRACE-grafana-alert-1"
+    assert body["error_type"] == "NullPointerException"
+    assert "DatasetService.getVersion" in body["query_terms"]
+
+
+def test_generic_webhook_rejects_wrong_secret(monkeypatch):
+    monkeypatch.setenv("LEGACY_PILOT_WEBHOOK_SECRET", "expected-secret")
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/v1/alerts/webhook/generic",
+        params={"repo_id": "repo-demo", "graph_id": "GRAPH-DEMO"},
+        headers={"X-LegacyPilot-Webhook-Secret": "wrong-secret"},
+        json={"message": "NullPointerException"},
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error_code"] == "AUTHENTICATION_ERROR"
+    assert body["source_module"] == "alert_intake"
+
+
 def test_generate_rca_endpoint_converts_unknown_qwen_evidence_id_to_contract_error():
     memory_store = ApiMemoryStoreAdapter()
     router = MiddlewareRouter(
@@ -238,6 +294,28 @@ def test_generate_rca_endpoint_converts_unknown_qwen_evidence_id_to_contract_err
     assert body["source_module"] == "rca_reasoning_engine"
     assert body["error_code"] == "VALIDATION_ERROR"
     assert "EV-UNKNOWN" in body["message"]
+
+
+def test_generate_rca_endpoint_converts_qwen_timeout_to_contract_error():
+    memory_store = ApiMemoryStoreAdapter()
+    router = MiddlewareRouter(
+        code_knowledge_core_adapter=TestCodeKnowledgeCoreAdapter(),
+        incident_memory_store_adapter=memory_store,
+        rca_reasoning_engine_adapter=qwen_rca_adapter_that_times_out(),
+    )
+    client = TestClient(create_app(router=router))
+    query = client.post("/v1/alerts/submit", json=alert_payload()).json()
+    bundle = client.post("/v1/evidence-bundles/build", json=query).json()
+
+    response = client.post("/v1/rca/generate", json=bundle)
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["trace_id"] == "TRACE-ALERT-001"
+    assert body["source_module"] == "rca_reasoning_engine"
+    assert body["error_code"] == "VALIDATION_ERROR"
+    assert body["recoverable"] is True
+    assert "timed out" in body["message"]
 
 
 def test_http_pipeline_builds_qwen_reviews_and_saves_incident():

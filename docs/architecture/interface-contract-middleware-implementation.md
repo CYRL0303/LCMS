@@ -127,6 +127,20 @@ Owner: Incident Context Builder
 - `suspected_location = DatasetService.getVersion`
 - `trace_id = TRACE-{alert_id}`
 
+### 4.4.1 GenericWebhookAlert
+
+```text
+POST /v1/alerts/webhook/generic
+Request: provider-specific JSON payload plus repo_id/graph_id query params
+Response: IncidentQuery
+Owner: Alert Intake -> Incident Context Builder
+```
+
+This is an intake adapter, not a new Structure2 core contract. The endpoint
+normalizes external webhook JSON into `AlertEvent`, then calls the same
+`SubmitAlert` path. If `LEGACY_PILOT_WEBHOOK_SECRET` is set, requests must
+include `X-LegacyPilot-Webhook-Secret`.
+
 ### 4.5 BuildEvidenceBundle
 
 ```text
@@ -568,12 +582,20 @@ Runtime defaults:
 LEGACY_PILOT_CODE_CORE_BACKEND=gitnexus_cli
 LEGACY_PILOT_INCIDENT_CONTEXT_BACKEND=graph_context
 LEGACY_PILOT_RCA_BACKEND=qwen_api
+LEGACY_PILOT_RCA_TIMEOUT_SECONDS=120
+LEGACY_PILOT_RCA_TRANSPORT_RETRIES=1
+LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS=1
 LEGACY_PILOT_INCIDENT_MEMORY_BACKEND=postgresql
 ```
 
 Production Structure 4 only allows PostgreSQL. Missing
 `LEGACY_PILOT_INCIDENT_MEMORY_DSN` fails loudly; there is no production memory
 fallback.
+
+Structure 3 Qwen/DashScope transport failures are part of the contract
+boundary. Timeout, temporary URL/open errors, and retryable HTTP responses are
+wrapped as recoverable `rca_reasoning_engine` contract errors after bounded
+retry/backoff; they must not escape as unhandled middleware HTTP 500 responses.
 
 Current request/response contract additions:
 
@@ -596,6 +618,7 @@ POST   /v1/graph/query
 GET    /v1/graphs
 DELETE /v1/graphs/{repo_id}/{graph_id}
 POST   /v1/alerts/submit
+POST   /v1/alerts/webhook/generic
 POST   /v1/evidence-bundles/build
 POST   /v1/incidents/similar
 POST   /v1/rca/generate

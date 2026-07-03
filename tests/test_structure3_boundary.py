@@ -88,6 +88,21 @@ def test_rca_factory_reads_qwen_repair_attempts_from_env(monkeypatch):
     assert adapter.max_repair_attempts == 3
 
 
+def test_rca_factory_reads_qwen_transport_timeout_and_retries_from_env(monkeypatch):
+    monkeypatch.delenv("LEGACY_PILOT_RCA_BACKEND", raising=False)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    monkeypatch.setenv("LEGACY_PILOT_RCA_TIMEOUT_SECONDS", "90")
+    monkeypatch.setenv("LEGACY_PILOT_RCA_TRANSPORT_RETRIES", "1")
+    monkeypatch.setenv("LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS", "0")
+
+    adapter = create_rca_reasoning_engine_adapter()
+
+    assert isinstance(adapter, QwenApiRCAReasoningEngineAdapter)
+    assert adapter.request_timeout_seconds == 90
+    assert adapter.max_transport_retries == 1
+    assert adapter.transport_retry_backoff_seconds == 0
+
+
 def test_structure3_package_imports_only_contracts_and_own_package():
     root = Path(__file__).resolve().parents[1] / "legacy_pilot" / "rca_reasoning_engine"
     allowed_legacy_prefixes = (
@@ -398,6 +413,29 @@ def test_qwen_adapter_uses_request_scoped_api_key(monkeypatch):
         )
 
     assert requests[0]["headers"]["Authorization"] == "Bearer runtime-key"
+    assert report.selected_root_cause.summary == "datasetId guard missing"
+
+
+def test_qwen_adapter_retries_transport_timeout_before_generating_report():
+    requests = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict) -> dict:
+        requests.append(body)
+        if len(requests) == 1:
+            raise TimeoutError("The read operation timed out")
+        return {"choices": [{"message": {"content": valid_qwen_content()}}]}
+
+    adapter = QwenApiRCAReasoningEngineAdapter(
+        api_key="test-key",
+        http_post=fake_post,
+        transport_retry_backoff_seconds=0,
+    )
+
+    report = adapter.generate_rca(
+        evidence_bundle(code_evidence=[evidence_ref("EV-CODE-1", "code")])
+    )
+
+    assert len(requests) == 2
     assert report.selected_root_cause.summary == "datasetId guard missing"
 
 

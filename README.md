@@ -282,12 +282,21 @@ $env:LEGACY_PILOT_RCA_BASE_URL='https://dashscope-intl.aliyuncs.com/compatible-m
 $env:LEGACY_PILOT_RCA_MODEL='qwen-plus'
 $env:LEGACY_PILOT_RCA_CONFIDENCE_CAP='0.75'
 $env:LEGACY_PILOT_RCA_REPAIR_ATTEMPTS='2'
+$env:LEGACY_PILOT_RCA_TIMEOUT_SECONDS='120'
+$env:LEGACY_PILOT_RCA_TRANSPORT_RETRIES='1'
+$env:LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS='1'
 $env:DASHSCOPE_API_KEY='<set outside git>'
 ```
 
 The Qwen adapter retries invalid JSON or invalid schema responses with a repair
 prompt. `LEGACY_PILOT_RCA_REPAIR_ATTEMPTS` is bounded internally so real runs
 cannot retry indefinitely.
+Transport timeouts are handled separately: `LEGACY_PILOT_RCA_TIMEOUT_SECONDS`
+controls the DashScope read timeout, `LEGACY_PILOT_RCA_TRANSPORT_RETRIES`
+controls retry count for timeout/temporary transport failures, and
+`LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS` controls exponential backoff. Exhausted
+transport failures return a recoverable contract error instead of an unhandled
+HTTP 500.
 
 Persist the Qwen key once for this Windows user:
 
@@ -393,6 +402,30 @@ Then open `http://127.0.0.1:5173`. A product-path manual run can either:
 - Select a persisted graph from `Existing graphs`, click `Use existing graph`,
   fill `Alert ID` and `Raw log`, then click `Run full pipeline`.
 
+Structure2 alert input supports three modes:
+
+- `Manual`: paste `Raw log`, `Stack trace`, and `Error description` into the
+  existing `AlertEvent` form.
+- `Import local log`: select local `.log`, `.txt`, or `.json` files or a local
+  log folder. The browser reads selected files and fills `AlertEvent.raw_log`;
+  the backend never reads a local desktop path.
+- `Webhook`: external monitoring systems can POST a generic JSON alert to the
+  middleware. The webhook payload is normalized into `AlertEvent` and then goes
+  through the same `SubmitAlert -> BuildEvidenceBundle -> RCA` path.
+
+Generic webhook example:
+
+```bash
+curl -X POST "http://127.0.0.1:8080/api/v1/alerts/webhook/generic?repo_id=ibm-demo&graph_id=GRAPH-..." \
+  -H "Content-Type: application/json" \
+  -H "X-LegacyPilot-Webhook-Secret: dev-secret" \
+  -d '{"id":"alert-1","source":"grafana","message":"NullPointerException at BookController.java:31","title":"Book API failed"}'
+```
+
+Set `LEGACY_PILOT_WEBHOOK_SECRET` in production to require the
+`X-LegacyPilot-Webhook-Secret` header. Leaving it empty keeps local development
+unblocked.
+
 The settings modal stores the Qwen API key and GitHub/GitLab tokens in browser
 localStorage. The frontend does not call GitNexus, PostgreSQL, DashScope,
 GitHub, or GitLab directly; it forwards credentials to the middleware headers.
@@ -426,6 +459,10 @@ DASHSCOPE_API_KEY=
 GITNEXUS_SOURCE_ROOT=Q:\Hackathons\GitNexus-main\GitNexus-main
 GITNEXUS_PACKAGE_DIR=gitnexus
 GITNEXUS_CYPHER_RETRY_EDGE_LIMIT=100
+LEGACY_PILOT_RCA_TIMEOUT_SECONDS=120
+LEGACY_PILOT_RCA_TRANSPORT_RETRIES=1
+LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS=1
+LEGACY_PILOT_WEBHOOK_SECRET=
 ```
 
 `GITNEXUS_SOURCE_ROOT` must point to a real GitNexus source checkout.
@@ -522,6 +559,7 @@ Compose demo is stable.
 - `GET /v1/graphs`
 - `DELETE /v1/graphs/{repo_id}/{graph_id}`
 - `POST /v1/alerts/submit`
+- `POST /v1/alerts/webhook/generic`
 - `POST /v1/evidence-bundles/build`
 - `POST /v1/incidents/similar`
 - `GET /v1/incidents/{incident_id}`

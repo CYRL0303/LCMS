@@ -1,4 +1,5 @@
 import os
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
@@ -22,6 +23,40 @@ DEFAULT_INCIDENT_CONTEXT_BACKEND = "graph_context"
 ALLOWED_INCIDENT_CONTEXT_BACKENDS = ("graph_context",)
 MIN_RECALL_EVIDENCE_REFS = 2
 RECALL_MAX_DEPTH = 6
+RECALL_MAX_TERMS = 6
+JAVA_ROLE_SUFFIXES = (
+    "Controller",
+    "Service",
+    "Repository",
+    "Mapper",
+    "DAO",
+    "Dao",
+    "Client",
+    "Handler",
+    "Manager",
+    "Processor",
+)
+NOISY_RECALL_TERMS = {
+    "Abstract",
+    "Autowired",
+    "Client",
+    "Default",
+    "Delegating",
+    "Dispatcher",
+    "Framework",
+    "Injection",
+    "Invocable",
+    "Method",
+    "Native",
+    "Prepared",
+    "PreparedStatement",
+    "Proxy",
+    "Request",
+    "Servlet",
+    "Spring",
+    "SQLSyntax",
+}
+PASCAL_PART_RE = re.compile(r"[A-Z][a-z0-9]*")
 
 
 class IncidentContextBuilderAdapter(ABC):
@@ -111,22 +146,108 @@ def _needs_recall_retry(graph_context: GraphContext) -> bool:
 
 
 def _recall_graph_query(query: IncidentQuery, base_query: GraphQuery) -> GraphQuery:
-    recall_terms = _dedupe(
-        [
-            *base_query.query_terms,
-            *query.query_terms,
-            *query.keywords,
-            query.suspected_location,
-            query.endpoint,
-            query.error_type,
-        ]
-    )
+    recall_terms = _high_recall_terms(query)
+    if not recall_terms:
+        recall_terms = _dedupe(
+            [
+                *base_query.query_terms,
+                *query.query_terms,
+                *query.keywords,
+                query.suspected_location,
+                query.endpoint,
+                query.error_type,
+            ]
+        )
     return base_query.model_copy(
         update={
             "query_terms": recall_terms,
             "max_depth": max(base_query.max_depth, RECALL_MAX_DEPTH),
         }
     )
+
+
+def _high_recall_terms(query: IncidentQuery) -> list[str]:
+    terms = [*query.query_terms, *query.keywords, query.suspected_location]
+    roots = _dedupe(_root_terms(terms))
+    keywords = _dedupe(
+        term for term in query.keywords if term and _is_recall_keyword(term)
+    )
+    classes = _dedupe(_class_terms(terms))
+    return _dedupe([*roots, *keywords, *classes])[:RECALL_MAX_TERMS]
+
+
+def _root_terms(terms) -> list[str]:
+    output: list[str] = []
+    for term in terms:
+        class_name = _class_name(term)
+        if not class_name:
+            continue
+        role_root = _role_root(class_name)
+        if role_root:
+            output.extend(_pascal_roots(role_root))
+            continue
+        output.extend(_pascal_roots(class_name))
+    return _ranked_terms([term for term in output if _is_recall_pascal_term(term)])
+
+
+def _ranked_terms(terms: list[str]) -> list[str]:
+    counts: dict[str, int] = {}
+    first_seen: dict[str, int] = {}
+    for index, term in enumerate(terms):
+        counts[term] = counts.get(term, 0) + 1
+        first_seen.setdefault(term, index)
+    return sorted(counts, key=lambda term: (-counts[term], first_seen[term]))
+
+
+def _class_terms(terms) -> list[str]:
+    output: list[str] = []
+    for term in terms:
+        class_name = _class_name(term)
+        if class_name and _role_root(class_name) and _is_recall_pascal_term(class_name):
+            output.append(class_name)
+    return output
+
+
+def _class_name(term: str | None) -> str | None:
+    if (
+        not term
+        or "/" in term
+        or term.endswith(".java")
+        or term.endswith(("Exception", "Error"))
+    ):
+        return None
+    candidate = term.split(".", 1)[0]
+    if not candidate or not candidate[:1].isupper():
+        return None
+    return candidate
+
+
+def _role_root(class_name: str) -> str | None:
+    for suffix in JAVA_ROLE_SUFFIXES:
+        if class_name.endswith(suffix) and len(class_name) > len(suffix):
+            return class_name[: -len(suffix)]
+    return None
+
+
+def _pascal_roots(value: str) -> list[str]:
+    parts = PASCAL_PART_RE.findall(value)
+    if len(parts) <= 1:
+        return [value]
+    return [parts[0], value]
+
+
+def _is_recall_pascal_term(term: str) -> bool:
+    first_part = PASCAL_PART_RE.findall(term)[:1]
+    return (
+        len(term) >= 3
+        and term not in NOISY_RECALL_TERMS
+        and (not first_part or first_part[0] not in NOISY_RECALL_TERMS)
+        and not term.endswith(("Exception", "Error"))
+    )
+
+
+def _is_recall_keyword(term: str) -> bool:
+    return bool(term) and "/" not in term and "." not in term
 
 
 def _merge_graph_contexts(primary: GraphContext, recalled: GraphContext) -> GraphContext:

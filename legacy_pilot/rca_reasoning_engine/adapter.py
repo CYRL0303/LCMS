@@ -1,9 +1,11 @@
 import os
 import re
+import socket
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from json import dumps, loads
+from time import sleep
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -31,6 +33,9 @@ RCA_BASE_URL_ENV = "LEGACY_PILOT_RCA_BASE_URL"
 RCA_MODEL_ENV = "LEGACY_PILOT_RCA_MODEL"
 RCA_CONFIDENCE_CAP_ENV = "LEGACY_PILOT_RCA_CONFIDENCE_CAP"
 RCA_REPAIR_ATTEMPTS_ENV = "LEGACY_PILOT_RCA_REPAIR_ATTEMPTS"
+RCA_TIMEOUT_SECONDS_ENV = "LEGACY_PILOT_RCA_TIMEOUT_SECONDS"
+RCA_TRANSPORT_RETRIES_ENV = "LEGACY_PILOT_RCA_TRANSPORT_RETRIES"
+RCA_RETRY_BACKOFF_SECONDS_ENV = "LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS"
 DASHSCOPE_API_KEY_ENV = "DASHSCOPE_API_KEY"
 DEFAULT_RCA_BACKEND = "qwen_api"
 DEFAULT_QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
@@ -38,6 +43,14 @@ DEFAULT_QWEN_MODEL = "qwen-plus"
 DEFAULT_RCA_CONFIDENCE_CAP = 0.75
 DEFAULT_QWEN_REPAIR_ATTEMPTS = 2
 MAX_QWEN_REPAIR_ATTEMPTS = 3
+DEFAULT_QWEN_TIMEOUT_SECONDS = 120.0
+MIN_QWEN_TIMEOUT_SECONDS = 1.0
+MAX_QWEN_TIMEOUT_SECONDS = 600.0
+DEFAULT_QWEN_TRANSPORT_RETRIES = 1
+MAX_QWEN_TRANSPORT_RETRIES = 3
+DEFAULT_QWEN_RETRY_BACKOFF_SECONDS = 1.0
+MAX_QWEN_RETRY_BACKOFF_SECONDS = 30.0
+RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 LOW_RECALL_CONFIDENCE_CAP = 0.5
 LOW_RECALL_MIN_EVIDENCE_REFS = 2
 EVIDENCE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_$]*")
@@ -80,6 +93,10 @@ class RCAReasoningEngineAdapter(ABC):
         ...
 
 
+class _QwenRetryableTransportError(RCAGenerationError):
+    pass
+
+
 @dataclass(frozen=True)
 class QwenApiRCAReasoningEngineAdapter(RCAReasoningEngineAdapter):
     api_key: str | None = field(default=None, repr=False)
@@ -88,6 +105,13 @@ class QwenApiRCAReasoningEngineAdapter(RCAReasoningEngineAdapter):
     confidence_cap: float = DEFAULT_RCA_CONFIDENCE_CAP
     http_post: Any | None = None
     max_repair_attempts: int = DEFAULT_QWEN_REPAIR_ATTEMPTS
+    request_timeout_seconds: float = DEFAULT_QWEN_TIMEOUT_SECONDS
+    max_transport_retries: int = DEFAULT_QWEN_TRANSPORT_RETRIES
+    transport_retry_backoff_seconds: float = DEFAULT_QWEN_RETRY_BACKOFF_SECONDS
+    transport_retry_sleep: Callable[[float], None] | None = field(
+        default=None,
+        repr=False,
+    )
     metadata_recorder: Callable[[dict[str, Any]], None] | None = field(
         default=None,
         repr=False,
@@ -210,9 +234,44 @@ class QwenApiRCAReasoningEngineAdapter(RCAReasoningEngineAdapter):
         headers: dict[str, str],
         body: dict[str, Any],
     ) -> dict[str, Any]:
-        if self.http_post is not None:
-            return self.http_post(url, headers, body)
-        return _http_post_json(url, headers=headers, body=body)
+        retry_limit = _bounded_transport_retries(self.max_transport_retries)
+        last_error: RCAGenerationError | None = None
+        for attempt in range(retry_limit + 1):
+            try:
+                if self.http_post is not None:
+                    return self.http_post(url, headers, body)
+                return _http_post_json(
+                    url,
+                    headers=headers,
+                    body=body,
+                    timeout_seconds=self.request_timeout_seconds,
+                )
+            except _QwenRetryableTransportError as exc:
+                last_error = exc
+            except (TimeoutError, socket.timeout, URLError, OSError) as exc:
+                last_error = _transport_error_from_exception(
+                    exc,
+                    timeout_seconds=self.request_timeout_seconds,
+                )
+            if attempt < retry_limit:
+                self._sleep_before_transport_retry(attempt)
+                continue
+            break
+        if last_error is not None:
+            raise RCAGenerationError(
+                "Qwen RCA API request failed after "
+                f"attempts={retry_limit + 1}; "
+                f"last_error={_error_summary(last_error.message)}",
+                recoverable=last_error.recoverable,
+            ) from last_error
+        raise RCAGenerationError("Qwen RCA API request failed.")
+
+    def _sleep_before_transport_retry(self, attempt: int) -> None:
+        base_delay = _bounded_backoff_seconds(self.transport_retry_backoff_seconds)
+        if base_delay <= 0:
+            return
+        delay = min(base_delay * (2**attempt), MAX_QWEN_RETRY_BACKOFF_SECONDS)
+        (self.transport_retry_sleep or sleep)(delay)
 
     def _record_metadata(
         self,
@@ -262,6 +321,9 @@ def create_rca_reasoning_engine_adapter(
             model=os.getenv(RCA_MODEL_ENV, DEFAULT_QWEN_MODEL),
             confidence_cap=_confidence_cap(),
             max_repair_attempts=_repair_attempts(),
+            request_timeout_seconds=_timeout_seconds(),
+            max_transport_retries=_transport_retries(),
+            transport_retry_backoff_seconds=_retry_backoff_seconds(),
         )
     return UnsupportedRCAReasoningEngineAdapter(selected)
 
@@ -603,7 +665,9 @@ def _http_post_json(
     *,
     headers: dict[str, str],
     body: dict[str, Any],
+    timeout_seconds: float = DEFAULT_QWEN_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
+    timeout = _bounded_timeout_seconds(timeout_seconds)
     request = Request(
         url,
         data=dumps(body).encode("utf-8"),
@@ -611,13 +675,63 @@ def _http_post_json(
         method="POST",
     )
     try:
-        with urlopen(request, timeout=30) as response:
-            return loads(response.read().decode("utf-8"))
+        with urlopen(request, timeout=timeout) as response:
+            try:
+                return loads(response.read().decode("utf-8"))
+            except ValueError as exc:
+                raise RCAGenerationError(
+                    "Qwen RCA API returned non-JSON response."
+                ) from exc
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RCAGenerationError(f"Qwen RCA API HTTP {exc.code}: {detail}") from exc
+        message = f"Qwen RCA API HTTP {exc.code}: {detail}"
+        if exc.code in RETRYABLE_HTTP_STATUS_CODES:
+            raise _QwenRetryableTransportError(message, recoverable=True) from exc
+        raise RCAGenerationError(
+            message,
+            recoverable=exc.code not in {401, 403},
+        ) from exc
     except URLError as exc:
-        raise RCAGenerationError(f"Qwen RCA API request failed: {exc.reason}") from exc
+        raise _transport_error_from_exception(
+            exc,
+            timeout_seconds=timeout,
+        ) from exc
+    except (TimeoutError, socket.timeout, OSError) as exc:
+        raise _transport_error_from_exception(
+            exc,
+            timeout_seconds=timeout,
+        ) from exc
+
+
+def _transport_error_from_exception(
+    exc: BaseException,
+    *,
+    timeout_seconds: float,
+) -> _QwenRetryableTransportError:
+    reason: object
+    if isinstance(exc, URLError):
+        reason = exc.reason
+    else:
+        reason = exc
+    reason_text = " ".join(str(reason).split()) or exc.__class__.__name__
+    if _is_timeout_exception(exc) or "timed out" in reason_text.lower():
+        return _QwenRetryableTransportError(
+            "Qwen RCA API request timed out after "
+            f"{_format_seconds(timeout_seconds)}s: {reason_text}",
+            recoverable=True,
+        )
+    return _QwenRetryableTransportError(
+        f"Qwen RCA API request failed: {reason_text}",
+        recoverable=True,
+    )
+
+
+def _is_timeout_exception(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(exc, URLError):
+        return isinstance(exc.reason, (TimeoutError, socket.timeout))
+    return False
 
 
 def _dedupe_evidence(refs: list[EvidenceRef]) -> list[EvidenceRef]:
@@ -654,6 +768,72 @@ def _bounded_repair_attempts(value: int) -> int:
     except (TypeError, ValueError):
         requested = DEFAULT_QWEN_REPAIR_ATTEMPTS
     return min(max(requested, 0), MAX_QWEN_REPAIR_ATTEMPTS)
+
+
+def _timeout_seconds() -> float:
+    return _bounded_timeout_seconds(
+        os.getenv(RCA_TIMEOUT_SECONDS_ENV, str(DEFAULT_QWEN_TIMEOUT_SECONDS))
+    )
+
+
+def _bounded_timeout_seconds(value: float | str | None) -> float:
+    return _bounded_float(
+        value,
+        default=DEFAULT_QWEN_TIMEOUT_SECONDS,
+        minimum=MIN_QWEN_TIMEOUT_SECONDS,
+        maximum=MAX_QWEN_TIMEOUT_SECONDS,
+    )
+
+
+def _transport_retries() -> int:
+    return _bounded_transport_retries(
+        os.getenv(RCA_TRANSPORT_RETRIES_ENV, str(DEFAULT_QWEN_TRANSPORT_RETRIES))
+    )
+
+
+def _bounded_transport_retries(value: int | str | None) -> int:
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        requested = DEFAULT_QWEN_TRANSPORT_RETRIES
+    return min(max(requested, 0), MAX_QWEN_TRANSPORT_RETRIES)
+
+
+def _retry_backoff_seconds() -> float:
+    return _bounded_backoff_seconds(
+        os.getenv(
+            RCA_RETRY_BACKOFF_SECONDS_ENV,
+            str(DEFAULT_QWEN_RETRY_BACKOFF_SECONDS),
+        )
+    )
+
+
+def _bounded_backoff_seconds(value: float | str | None) -> float:
+    return _bounded_float(
+        value,
+        default=DEFAULT_QWEN_RETRY_BACKOFF_SECONDS,
+        minimum=0.0,
+        maximum=MAX_QWEN_RETRY_BACKOFF_SECONDS,
+    )
+
+
+def _bounded_float(
+    value: float | str | None,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    try:
+        requested = float(value)
+    except (TypeError, ValueError):
+        requested = default
+    return min(max(requested, minimum), maximum)
+
+
+def _format_seconds(value: float) -> str:
+    formatted = f"{value:.3f}".rstrip("0").rstrip(".")
+    return formatted or "0"
 
 
 def _error_summary(message: str) -> str:

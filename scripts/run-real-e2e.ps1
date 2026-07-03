@@ -10,6 +10,9 @@ param(
     [string]$RcaModel = $env:LEGACY_PILOT_RCA_MODEL,
     [string]$RcaConfidenceCap = $env:LEGACY_PILOT_RCA_CONFIDENCE_CAP,
     [string]$RcaRepairAttempts = $env:LEGACY_PILOT_RCA_REPAIR_ATTEMPTS,
+    [string]$RcaTimeoutSeconds = $env:LEGACY_PILOT_RCA_TIMEOUT_SECONDS,
+    [string]$RcaTransportRetries = $env:LEGACY_PILOT_RCA_TRANSPORT_RETRIES,
+    [string]$RcaRetryBackoffSeconds = $env:LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS,
     [string]$DockerDesktopPath = $env:DOCKER_DESKTOP_EXE,
     [int]$DockerWaitSeconds = 120,
     [int]$PostgresWaitSeconds = 60,
@@ -88,6 +91,15 @@ if ([string]::IsNullOrWhiteSpace($RcaConfidenceCap)) {
 }
 if ([string]::IsNullOrWhiteSpace($RcaRepairAttempts)) {
     $RcaRepairAttempts = "2"
+}
+if ([string]::IsNullOrWhiteSpace($RcaTimeoutSeconds)) {
+    $RcaTimeoutSeconds = "120"
+}
+if ([string]::IsNullOrWhiteSpace($RcaTransportRetries)) {
+    $RcaTransportRetries = "1"
+}
+if ([string]::IsNullOrWhiteSpace($RcaRetryBackoffSeconds)) {
+    $RcaRetryBackoffSeconds = "1"
 }
 if ([string]::IsNullOrWhiteSpace($DockerDesktopPath)) {
     $DockerDesktopPath = $DefaultDockerDesktopPath
@@ -216,6 +228,9 @@ $env:LEGACY_PILOT_RCA_BASE_URL = $RcaBaseUrl
 $env:LEGACY_PILOT_RCA_MODEL = $RcaModel
 $env:LEGACY_PILOT_RCA_CONFIDENCE_CAP = $RcaConfidenceCap
 $env:LEGACY_PILOT_RCA_REPAIR_ATTEMPTS = $RcaRepairAttempts
+$env:LEGACY_PILOT_RCA_TIMEOUT_SECONDS = $RcaTimeoutSeconds
+$env:LEGACY_PILOT_RCA_TRANSPORT_RETRIES = $RcaTransportRetries
+$env:LEGACY_PILOT_RCA_RETRY_BACKOFF_SECONDS = $RcaRetryBackoffSeconds
 $env:GITNEXUS_BIN = $GitNexusBin
 $env:GITNEXUS_REPO_ROOT = $GitNexusRepoRoot
 $env:GITNEXUS_INDEX_TIMEOUT_SECONDS = "120"
