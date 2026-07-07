@@ -22,6 +22,7 @@ Java 后端 `LegacyPilot` 已经实现：
   - `TaskController`
 - 一键本地项目接入接口：
   - `POST /api/onboarding/local-project`
+  - `POST /api/onboarding/projects`
 - 本地 Git 仓库识别：
   - local path
   - repository URL
@@ -33,10 +34,30 @@ Java 后端 `LegacyPilot` 已经实现：
   - config files
   - build files
   - markdown files
-- Java 调 Python LCMS：
-  - `CodeKnowledgeClient`
-  - `POST /v1/repos/index`
-- 返回结构：
+- 第一版 MySQL 持久化：
+  - `legacy_project`
+  - `repository_index`
+  - `analysis_task`
+  - `code_analysis_snapshot`
+  - `incident_record`
+- Java Code Analysis Core：
+  - JavaParser AST 地基第一版
+  - class / method / endpoint 提取
+  - Spring endpoint 识别
+  - Controller / Service / Repository / Mapper / Component / Configuration 分类
+  - 字段注入 / 构造器注入 / setter 注入基础识别
+  - `CALLS` / `DECLARES` / `MAPS_TO_ENDPOINT` / `USES_*` 边
+  - `endpoint trace` 第一版
+  - SQL 注解最小闭环：`@Query` / `@Select` / `@Insert` / `@Update` / `@Delete`
+- AgentTool：
+  - `endpoint.select`
+  - `endpoint.list`
+  - `endpoint.lookup`
+  - `evidence.endpoint`
+  - `trace.endpoint`
+  - `code_graph.get_graph`
+  - `rca.investigate`
+- 当前返回结构：
 
 ```text
 project + repository + files + graph
@@ -53,7 +74,11 @@ Python `LCMS` 已经实现：
 当前问题：
 
 ```text
-Java -> Python 链路已经通了，但 Python 返回的是 mock 图谱，不是真实代码解析结果。
+主流程已经不再依赖 Python mock 图谱。
+Java 侧已经能生成真实 CodeAnalysisResult。
+当前还没有接 Qwen，AgentModelClient 仍是 NoOp 占位。
+当前 code_analysis_snapshot 仍存完整 JSON，nodes / edges / endpoints 尚未拆表。
+当前 SQL 关系只做到 Method -> SQL Statement，还没有 SQL Statement -> Table。
 ```
 
 ## 3. 关键架构共识
@@ -114,39 +139,40 @@ Python 可以继续保留为 AI/RAG/contract 层，但真正“读懂 Java 项�
 
 ## 5. 下一步最重要的实现方向
 
-下一步不要优先做前端，也不要优先做完整 Agent。应该先做：
+下一步不要优先做前端，也不要优先接 Qwen。应该继续小步增强：
 
 ```text
-Java Code Analysis Core MVP
+Code Analysis Step 4.2：SQL Statement -> Table 最小闭环
 ```
 
-建议新增模块位置：
+只做最小范围：
 
 ```text
-LegacyPilot/src/main/java/com/legacypilot/codeanalysis
+从当前已经识别到的 SQL Statement 文本中抽取简单表名。
+支持：
+- FROM table_name
+- JOIN table_name
+- UPDATE table_name
+- INSERT INTO table_name
+- DELETE FROM table_name
+
+生成：
+- Table 节点
+- SQL Statement -> Table 的 TOUCHES_TABLE 边
 ```
 
-建议子包：
+明确不要做：
 
 ```text
-codeanalysis/
-  parser/
-    JavaSourceParser.java
-    SpringAnnotationParser.java
-    MyBatisXmlParser.java
-  model/
-    CodeNode.java
-    CodeEdge.java
-    EvidenceRef.java
-    CodeGraph.java
-  service/
-    JavaCodeAnalysisService.java
-    CodeGraphBuilder.java
+不要做复杂 SQL parser
+不要做 Mapper XML
+不要做 jdbcTemplate 字符串 SQL
+不要做 JPA 方法名推导
+不要大改图谱结构
+不要改数据库 schema，除非确实需要 Flyway migration
 ```
 
-## 6. 第一版核心算法范围
-
-第一版不要做太大。先支持 Java/Spring 最小闭环：
+## 6. 当前核心算法范围
 
 ### 需要识别的节点
 
@@ -180,7 +206,7 @@ DEFINED_IN
 
 ### 第一版最小可交付
 
-先做到：
+已经做到：
 
 ```text
 扫描 .java 文件
@@ -190,13 +216,15 @@ DEFINED_IN
 生成 endpoint node
 生成 class -> method -> endpoint 的边
 返回 nodeCount / edgeCount
+生成 method call 关系
+生成 endpoint trace
+生成 SQL Statement 节点
+生成 Method -> SQL Statement 的 EXECUTES_SQL 边
 ```
 
-然后再加：
+后续再加：
 
 ```text
-Service
-Mapper
 MyBatis XML
 SQL table
 Exception
@@ -241,23 +269,23 @@ files
 graph
 ```
 
-但是 `graph` 现在来自 Python mock：
+`graph` 当前来自 Java Code Analysis Core，不再是 Python mock：
 
 ```text
-GRAPH-DEMO
-2 nodes
-1 edge
+CodeAnalysisResult summary
+nodeCount
+edgeCount
+endpointCount
 ```
 
-后续 Java Code Analysis Core 实现后，`graph` 应该来自 Java 自己解析出的真实结果，或者由 Java 解析后传给 Python 归一化。
-
-当前 Java 内存数据会在重启后丢失。之后需要 SQL：
+当前数据库已经接入第一版 MySQL / Flyway：
 
 ```text
 legacy_project
 repository_index
 analysis_task
 incident_record
+code_analysis_snapshot
 ```
 
 ## 9. 推荐下一次开发任务
@@ -265,27 +293,34 @@ incident_record
 下一次开发请优先实现：
 
 ```text
-JavaCodeAnalysisService
+Step 4.2：SQL table extraction minimal loop
 ```
 
 目标：
 
 ```text
-输入 repoId 或 localRepoPath
-扫描 Java 文件
-提取 class / method / endpoint
-生成 CodeGraph
-返回真实 nodeCount / edgeCount
+在 JavaSqlAnnotationParser 已产生 SQL Statement 的基础上：
+从简单 SQL 文本抽取 table 名
+生成 Table 节点
+生成 SQL Statement -> Table 的 TOUCHES_TABLE 边
+让 endpoint trace 可以走到 Table 节点
 ```
 
-推荐先不要引入复杂 AST 依赖，第一版可以先用规则解析和注解扫描跑通结构。等闭环跑通后，再引入 JavaParser 或 Spoon 提升准确率。
-
-第一版完成标准：
+建议修改位置：
 
 ```text
-给一个 Spring Boot 项目路径
-接口能返回真实 endpoint 数量、class 数量、method 数量
-不再返回 GRAPH-DEMO
+LegacyPilot/src/main/java/com/legacypilot/codeanalysis/parser/JavaSqlAnnotationParser.java
+LegacyPilot/src/main/java/com/legacypilot/codeanalysis/service/EndpointTraceService.java
+PROJECT_PROGRESS_SUMMARY.zh-CN.md
+```
+
+完成标准：
+
+```text
+mvn.cmd test 通过
+重新 onboarding 后 graph 里出现 SQL Statement 和 Table 节点
+trace.endpoint 的 matchedEdges 里出现 EXECUTES_SQL 和 TOUCHES_TABLE
+PROJECT_PROGRESS_SUMMARY.zh-CN.md 记录当前状态
 ```
 
 ## 10. 一句话指导原则

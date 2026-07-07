@@ -1,5 +1,9 @@
 # LegacyPilot 运行说明
 
+> 新人先读 `PROJECT_OVERVIEW.zh-CN.md` 理解项目目标和架构，再按本文启动和测试项目。
+>
+> 如果是在另一台电脑上首次配置 Docker / 云数据库 / SSH 隧道，先读 `TEAM_SETUP.zh-CN.md`。
+
 ## 项目目录
 
 ```text
@@ -10,6 +14,25 @@ D:\Hackathon
 ```
 
 ## 后端启动
+
+如果使用共享阿里云 MySQL，先在另一个 PowerShell 窗口打开 SSH 隧道：
+
+```powershell
+ssh -L 3307:127.0.0.1:3306 <ssh_user>@<ecs_public_ip>
+```
+
+然后在后端启动窗口设置数据库连接：
+
+```powershell
+cd D:\Hackathon\LegacyPilot
+
+$env:SPRING_PROFILES_ACTIVE="dev"
+$env:SPRING_DATASOURCE_URL="jdbc:mysql://127.0.0.1:3307/legacypilot"
+$env:SPRING_DATASOURCE_USERNAME="legacypilot"
+$env:SPRING_DATASOURCE_PASSWORD="<mysql_password>"
+```
+
+启动后端：
 
 ```powershell
 cd D:\Hackathon\LegacyPilot
@@ -139,7 +162,7 @@ agentContextText   给未来 Qwen 使用的上下文文本
 | `code_graph.get_graph` | 可用 | 返回当前项目代码图谱 |
 | `context.build` | 可用 | 生成 Agent 可读上下文文本 |
 | `rca.investigate` | 可用 | 规则版 RCA 小闭环 |
-| `trace.method_calls` | 未实现 | 需要后续补方法调用链算法 |
+| `trace.endpoint` | 可用 | 从 endpoint 追踪 handler、CALLS、SQL Statement |
 | `qwen.complete` | 未实现 | 需要后续接 Qwen |
 
 ## Agent 调度规则
@@ -167,10 +190,10 @@ LOOKUP_CODE
 ## 当前限制
 
 ```text
-1. 没有数据库，Spring 重启后需要重新 onboarding
+1. 数据库已接入 MySQL，但 AgentContextStore 仍是进程内当前 repoId
 2. 还没接 Qwen，answer 是占位文本
 3. GIT_URL 已预留但还不能 clone
-4. codeanalysis 还没有完整方法调用链
+4. codeanalysis 还没有完整方法调用链、Mapper XML、JPA 推导、复杂 SQL 解析
 5. 前端还没有完整绑定后端 API
 ```
 
