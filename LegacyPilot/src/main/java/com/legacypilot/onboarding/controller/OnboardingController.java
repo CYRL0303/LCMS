@@ -28,4 +28,12 @@ public class OnboardingController {
     public OnboardProjectResponse onboardProject(@RequestBody OnboardProjectRequest request) {
         return projectOnboardingService.onboardProject(request);
     }
+
+    /**
+     * Backward-compatible route used by the earlier frontend/Postman flow.
+     */
+    @PostMapping("/local-project")
+    public OnboardProjectResponse onboardLocalProject(@RequestBody OnboardProjectRequest request) {
+        return projectOnboardingService.onboardProject(request);
+    }
 }

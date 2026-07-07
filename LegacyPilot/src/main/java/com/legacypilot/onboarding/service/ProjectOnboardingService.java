@@ -59,7 +59,7 @@ public class ProjectOnboardingService {
 
         ResolvedRepositorySource source = resolverFor(sourceType).resolve(request);
         String createdAt = Instant.now().toString();
-        LegacyProject project = projectService.createProject(
+        LegacyProject project = projectService.findOrCreateProject(
                 request.projectName(),
                 source.localRepository().repositoryUrl(),
                 source.localRepository().branch(),

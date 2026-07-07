@@ -9,6 +9,11 @@ import com.legacypilot.agenttool.endpointselector.service.EndpointSelectorServic
 import com.legacypilot.agenttool.evidence.dto.EndpointEvidenceResult;
 import com.legacypilot.agenttool.evidence.service.EvidenceLookupService;
 import com.legacypilot.agenttool.query.dto.QueryUnderstandingResult;
+import com.legacypilot.agenttool.trace.dto.EndpointTraceRequest;
+import com.legacypilot.agenttool.trace.dto.EndpointTraceToolResult;
+import com.legacypilot.agenttool.trace.service.EndpointTraceToolService;
+import com.legacypilot.codeanalysis.entity.CodeEdge;
+import com.legacypilot.codeanalysis.entity.CodeNode;
 import java.util.List;
 import org.springframework.stereotype.Service;
 
@@ -22,15 +27,18 @@ public class RcaInvestigationService {
     private final AgentContextStore agentContextStore;
     private final EndpointSelectorService endpointSelectorService;
     private final EvidenceLookupService evidenceLookupService;
+    private final EndpointTraceToolService endpointTraceToolService;
 
     public RcaInvestigationService(
             AgentContextStore agentContextStore,
             EndpointSelectorService endpointSelectorService,
-            EvidenceLookupService evidenceLookupService
+            EvidenceLookupService evidenceLookupService,
+            EndpointTraceToolService endpointTraceToolService
     ) {
         this.agentContextStore = agentContextStore;
         this.endpointSelectorService = endpointSelectorService;
         this.evidenceLookupService = evidenceLookupService;
+        this.endpointTraceToolService = endpointTraceToolService;
     }
 
     public RcaInvestigationResult investigate(RcaInvestigationRequest request) {
@@ -60,9 +68,14 @@ public class RcaInvestigationService {
     private RcaEndpointCandidateResult toCandidateResult(String repoId, EndpointCandidateResult candidate) {
         EndpointEvidenceResult evidence =
                 evidenceLookupService.getEndpointEvidence(repoId, candidate.endpoint().endpointId());
+        EndpointTraceToolResult trace = endpointTraceToolService.traceEndpoint(
+                repoId,
+                new EndpointTraceRequest(candidate.endpoint().endpointId(), null, null, 6)
+        );
         return new RcaEndpointCandidateResult(
                 candidate.endpoint(),
                 evidence,
+                trace,
                 candidate.score(),
                 candidate.reason()
         );
@@ -137,8 +150,46 @@ public class RcaInvestigationService {
                         .append(trimSnippet(item.codeSnippet()).replace(System.lineSeparator(), System.lineSeparator() + "     "))
                         .append(System.lineSeparator());
             });
+            appendTraceSummary(builder, candidate.trace());
         }
         return builder.toString();
+    }
+
+    private void appendTraceSummary(StringBuilder builder, EndpointTraceToolResult trace) {
+        builder.append("   Trace:").append(System.lineSeparator());
+        builder.append("   - matchedNodes=")
+                .append(trace.matchedNodes().size())
+                .append(", matchedEdges=")
+                .append(trace.matchedEdges().size())
+                .append(", graphPaths=")
+                .append(trace.graphPaths().size())
+                .append(System.lineSeparator());
+        if (trace.matchedEdges().isEmpty()) {
+            builder.append("   - No downstream CALLS edge was found from this endpoint handler.")
+                    .append(System.lineSeparator());
+            return;
+        }
+        for (CodeEdge edge : trace.matchedEdges()) {
+            builder.append("   - ")
+                    .append(labelForNode(trace, edge.sourceNodeId()))
+                    .append(" --")
+                    .append(edge.type())
+                    .append("--> ")
+                    .append(labelForNode(trace, edge.targetNodeId()))
+                    .append(System.lineSeparator());
+        }
+    }
+
+    private String labelForNode(EndpointTraceToolResult trace, String nodeId) {
+        return trace.matchedNodes().stream()
+                .filter(node -> node.nodeId().equals(nodeId))
+                .findFirst()
+                .map(this::nodeLabel)
+                .orElse(nodeId);
+    }
+
+    private String nodeLabel(CodeNode node) {
+        return node.type() + ":" + node.name();
     }
 
     private String buildSummary(
@@ -174,6 +225,8 @@ public class RcaInvestigationService {
                     .append(candidate.score())
                     .append(", evidenceItems=")
                     .append(candidate.evidence().items().size())
+                    .append(", traceEdges=")
+                    .append(candidate.trace().matchedEdges().size())
                     .append(")")
                     .append(System.lineSeparator());
         }

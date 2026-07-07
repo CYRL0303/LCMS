@@ -38,3 +38,11 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### LegacyPilot runtime workspace ###
+source/repos/*
+source/uploads/*
+source/analysis/*
+!source/repos/.gitkeep
+!source/uploads/.gitkeep
+!source/analysis/.gitkeep

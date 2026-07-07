@@ -7,11 +7,11 @@ import com.legacypilot.repository.dto.IndexRepositoryRequest;
 import com.legacypilot.repository.dto.RepositoryFilesResponse;
 import com.legacypilot.repository.entity.RepositoryIndex;
 import com.legacypilot.repository.entity.RepositorySourceType;
+import com.legacypilot.persistence.jdbc.RepositoryJdbcRepository;
 import com.legacypilot.task.entity.AnalysisTask;
 import com.legacypilot.task.entity.AnalysisTaskStatus;
 import com.legacypilot.task.entity.AnalysisTaskType;
 import com.legacypilot.task.service.TaskService;
-import com.legacypilot.workspace.store.InMemoryWorkspaceStore;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -25,20 +25,20 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
  */
 @Service
 public class RepositoryService {
-    private final InMemoryWorkspaceStore store;
+    private final RepositoryJdbcRepository repositoryJdbcRepository;
     private final ProjectService projectService;
     private final TaskService taskService;
     private final GitRepositoryService gitRepositoryService;
     private final RepositoryFileScannerService repositoryFileScannerService;
 
     public RepositoryService(
-            InMemoryWorkspaceStore store,
+            RepositoryJdbcRepository repositoryJdbcRepository,
             ProjectService projectService,
             TaskService taskService,
             GitRepositoryService gitRepositoryService,
             RepositoryFileScannerService repositoryFileScannerService
     ) {
-        this.store = store;
+        this.repositoryJdbcRepository = repositoryJdbcRepository;
         this.projectService = projectService;
         this.taskService = taskService;
         this.gitRepositoryService = gitRepositoryService;
@@ -50,11 +50,8 @@ public class RepositoryService {
     }
 
     public RepositoryIndex getRepository(String repoId) {
-        RepositoryIndex repository = store.repositories().get(repoId);
-        if (repository == null) {
-            throw new ResponseStatusException(NOT_FOUND, "Repository not found: " + repoId);
-        }
-        return repository;
+        return repositoryJdbcRepository.findById(repoId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Repository not found: " + repoId));
     }
 
     public RepositoryIndex indexRepository(IndexRepositoryRequest request) {
@@ -91,7 +88,7 @@ public class RepositoryService {
                 createdAt
         );
 
-        store.repositories().put(repoId, repository);
+        repositoryJdbcRepository.insert(repository);
         taskService.saveTask(task);
         return repository;
     }
@@ -126,6 +123,51 @@ public class RepositoryService {
             GitRepositoryService.LocalGitRepository localRepository,
             String createdAt
     ) {
+        return repositoryJdbcRepository.findLatestByProjectId(project.projectId())
+                .map(existing -> updateExistingLocalRepositoryIndex(project, existing, localRepository, createdAt))
+                .orElseGet(() -> createNewLocalRepositoryIndex(project, localRepository, createdAt));
+    }
+
+    private RepositoryIndex updateExistingLocalRepositoryIndex(
+            LegacyProject project,
+            RepositoryIndex existing,
+            GitRepositoryService.LocalGitRepository localRepository,
+            String updatedAt
+    ) {
+        RepositoryIndex updated = new RepositoryIndex(
+                existing.repoId(),
+                project.projectId(),
+                RepositorySourceType.LOCAL_PATH,
+                localRepository.repositoryUrl(),
+                localRepository.localRepoPath(),
+                localRepository.branch(),
+                localRepository.commitSha(),
+                "GRAPH-" + existing.repoId(),
+                existing.taskId(),
+                existing.createdAt()
+        );
+        AnalysisTask task = new AnalysisTask(
+                existing.taskId(),
+                project.projectId(),
+                existing.repoId(),
+                null,
+                AnalysisTaskType.REPO_INDEX,
+                AnalysisTaskStatus.INDEXING_REPO,
+                "Local repository refreshed by onboarding.",
+                existing.createdAt(),
+                updatedAt
+        );
+
+        repositoryJdbcRepository.update(updated);
+        taskService.saveTask(task);
+        return updated;
+    }
+
+    private RepositoryIndex createNewLocalRepositoryIndex(
+            LegacyProject project,
+            GitRepositoryService.LocalGitRepository localRepository,
+            String createdAt
+    ) {
         String repoId = newId("REPO");
         String taskId = newId("TASK");
         RepositoryIndex repository = new RepositoryIndex(
@@ -152,7 +194,7 @@ public class RepositoryService {
                 createdAt
         );
 
-        store.repositories().put(repoId, repository);
+        repositoryJdbcRepository.insert(repository);
         taskService.saveTask(task);
         return repository;
     }

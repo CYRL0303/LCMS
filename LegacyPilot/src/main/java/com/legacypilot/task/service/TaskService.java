@@ -1,9 +1,9 @@
 package com.legacypilot.task.service;
 
+import com.legacypilot.persistence.jdbc.TaskJdbcRepository;
 import com.legacypilot.task.entity.AnalysisTask;
 import com.legacypilot.task.entity.AnalysisTaskStatus;
 import com.legacypilot.task.entity.AnalysisTaskType;
-import com.legacypilot.workspace.store.InMemoryWorkspaceStore;
 import java.time.Instant;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -15,10 +15,10 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
  */
 @Service
 public class TaskService {
-    private final InMemoryWorkspaceStore store;
+    private final TaskJdbcRepository taskJdbcRepository;
 
-    public TaskService(InMemoryWorkspaceStore store) {
-        this.store = store;
+    public TaskService(TaskJdbcRepository taskJdbcRepository) {
+        this.taskJdbcRepository = taskJdbcRepository;
     }
 
     public AnalysisTask getStatus() {
@@ -37,15 +37,12 @@ public class TaskService {
     }
 
     public AnalysisTask getTask(String taskId) {
-        AnalysisTask task = store.tasks().get(taskId);
-        if (task == null) {
-            throw new ResponseStatusException(NOT_FOUND, "Analysis task not found: " + taskId);
-        }
-        return task;
+        return taskJdbcRepository.findById(taskId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Analysis task not found: " + taskId));
     }
 
     public void saveTask(AnalysisTask task) {
-        store.tasks().put(task.taskId(), task);
+        taskJdbcRepository.save(task);
     }
 
     public String now() {

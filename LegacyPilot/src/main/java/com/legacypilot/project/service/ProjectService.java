@@ -2,7 +2,7 @@ package com.legacypilot.project.service;
 
 import com.legacypilot.project.dto.CreateProjectRequest;
 import com.legacypilot.project.entity.LegacyProject;
-import com.legacypilot.workspace.store.InMemoryWorkspaceStore;
+import com.legacypilot.persistence.jdbc.ProjectJdbcRepository;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.UUID;
@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
+import static org.springframework.http.HttpStatus.CONFLICT;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 /**
@@ -17,10 +18,12 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
  */
 @Service
 public class ProjectService {
-    private final InMemoryWorkspaceStore store;
+    private static final String DEFAULT_OWNER_ID = "local-dev";
 
-    public ProjectService(InMemoryWorkspaceStore store) {
-        this.store = store;
+    private final ProjectJdbcRepository projectJdbcRepository;
+
+    public ProjectService(ProjectJdbcRepository projectJdbcRepository) {
+        this.projectJdbcRepository = projectJdbcRepository;
     }
 
     public LegacyProject createProject(CreateProjectRequest request) {
@@ -35,6 +38,9 @@ public class ProjectService {
 
     public LegacyProject createProject(String name, String repositoryUrl, String defaultBranch, String createdAt) {
         requireText(name, "name");
+        if (projectJdbcRepository.findByOwnerIdAndName(DEFAULT_OWNER_ID, name).isPresent()) {
+            throw new ResponseStatusException(CONFLICT, "Project name already exists.");
+        }
         String projectId = newId("PROJ");
         LegacyProject project = new LegacyProject(
                 projectId,
@@ -43,20 +49,23 @@ public class ProjectService {
                 defaultValue(defaultBranch, "main"),
                 createdAt
         );
-        store.projects().put(projectId, project);
+        projectJdbcRepository.insert(project);
         return project;
+    }
+
+    public LegacyProject findOrCreateProject(String name, String repositoryUrl, String defaultBranch, String createdAt) {
+        requireText(name, "name");
+        return projectJdbcRepository.findByOwnerIdAndName(DEFAULT_OWNER_ID, name)
+                .orElseGet(() -> createProject(name, repositoryUrl, defaultBranch, createdAt));
     }
 
     public Collection<LegacyProject> listProjects() {
-        return store.projects().values();
+        return projectJdbcRepository.findAll();
     }
 
     public LegacyProject getProject(String projectId) {
-        LegacyProject project = store.projects().get(projectId);
-        if (project == null) {
-            throw new ResponseStatusException(NOT_FOUND, "Project not found: " + projectId);
-        }
-        return project;
+        return projectJdbcRepository.findById(projectId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Project not found: " + projectId));
     }
 
     private void requireText(String value, String fieldName) {

@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: LegacyPilot
+
+legacypilot:
+  storage:
+    root: ${LEGACYPILOT_STORAGE_ROOT:./source}
+    repos-dir: ${LEGACYPILOT_REPOS_DIR:${legacypilot.storage.root}/repos}
+    uploads-dir: ${LEGACYPILOT_UPLOADS_DIR:${legacypilot.storage.root}/uploads}
+    analysis-dir: ${LEGACYPILOT_ANALYSIS_DIR:${legacypilot.storage.root}/analysis}
+  qwen:
+    base-url: ${QWEN_BASE_URL:}
+    api-key: ${QWEN_API_KEY:}
+    model: ${QWEN_MODEL:qwen-plus}

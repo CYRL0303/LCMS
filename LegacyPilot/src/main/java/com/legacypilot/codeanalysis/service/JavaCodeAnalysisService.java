@@ -20,7 +20,9 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -80,23 +82,36 @@ public class JavaCodeAnalysisService {
             methodCount += contribution.methodCount();
         }
 
+        List<CodeNode> uniqueNodes = distinctById(nodes, CodeNode::nodeId);
+        List<CodeEdge> uniqueEdges = distinctById(edges, CodeEdge::edgeId);
+        List<CodeEndpoint> uniqueEndpoints = distinctById(endpoints, CodeEndpoint::endpointId);
+        List<EvidenceRef> uniqueEvidenceRefs = distinctById(evidenceRefs, EvidenceRef::evidenceId);
+
         CodeGraphSummary summary = new CodeGraphSummary(
                 repoId,
                 projectType.name(),
-                nodes.size(),
-                edges.size(),
+                uniqueNodes.size(),
+                uniqueEdges.size(),
                 classCount,
                 methodCount,
-                endpoints.size()
+                uniqueEndpoints.size()
         );
 
         return new CodeAnalysisResult(
                 summary,
-                List.copyOf(endpoints),
-                List.copyOf(nodes),
-                List.copyOf(edges),
-                List.copyOf(evidenceRefs)
+                uniqueEndpoints,
+                uniqueNodes,
+                uniqueEdges,
+                uniqueEvidenceRefs
         );
+    }
+
+    private <T> List<T> distinctById(List<T> items, java.util.function.Function<T, String> identity) {
+        Map<String, T> uniqueItems = new LinkedHashMap<>();
+        for (T item : items) {
+            uniqueItems.putIfAbsent(identity.apply(item), item);
+        }
+        return List.copyOf(uniqueItems.values());
     }
 
     private List<SourceFile> scanSourceFiles(Path repositoryRoot) {

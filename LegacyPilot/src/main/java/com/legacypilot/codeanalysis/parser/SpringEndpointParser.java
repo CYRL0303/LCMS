@@ -164,7 +164,7 @@ public class SpringEndpointParser implements CodeParser {
             String path,
             List<EvidenceRef> evidenceRefs
     ) {
-        String controllerNodeId = controllerNodeId(context, file, controller.className());
+        String controllerNodeId = controllerNodeId(context, controller.qualifiedName());
         String methodNodeId = methodNodeId(context, file, handlerMethod.name());
         EvidenceRef controllerEvidence = new EvidenceRef(
                 context.repoId() + ":EV:spring_controller:" + file.relativePath() + ":" + controller.classLine(),
@@ -181,14 +181,14 @@ public class SpringEndpointParser implements CodeParser {
                 controllerNodeId,
                 "Controller Class",
                 controller.className(),
-                controller.className(),
+                controller.qualifiedName(),
                 controllerEvidenceRefs
         ));
         result.addNode(new CodeNode(
                 methodNodeId,
                 "Handler Method",
                 handlerMethod.name(),
-                controller.className() + "." + handlerMethod.name(),
+                controller.qualifiedName() + "." + handlerMethod.name(),
                 evidenceRefs
         ));
         result.addNode(new CodeNode(
@@ -222,8 +222,8 @@ public class SpringEndpointParser implements CodeParser {
         );
     }
 
-    private String controllerNodeId(ProjectAnalysisContext context, SourceFile file, String controllerClass) {
-        return context.repoId() + ":CONTROLLER:" + file.relativePath() + "#" + controllerClass;
+    private String controllerNodeId(ProjectAnalysisContext context, String qualifiedName) {
+        return context.repoId() + ":CLASS:" + qualifiedName;
     }
 
     private String methodNodeId(ProjectAnalysisContext context, SourceFile file, String handlerMethod) {
@@ -237,7 +237,9 @@ public class SpringEndpointParser implements CodeParser {
             return null;
         }
 
+        String packageName = firstGroup(Pattern.compile("\\bpackage\\s+([\\w.]+)\\s*;"), content);
         String className = classMatcher.group(1);
+        String qualifiedName = packageName == null ? className : packageName + "." + className;
         int classStart = classMatcher.start();
         int classLine = lineNumber(content, classStart);
         String classAnnotationBlock = classAnnotationBlock(content, classStart);
@@ -252,7 +254,7 @@ public class SpringEndpointParser implements CodeParser {
                 classPaths,
                 file.relativePath()
         );
-        return new ControllerDeclaration(className, classLine, classStart, classPaths);
+        return new ControllerDeclaration(className, qualifiedName, classLine, classStart, classPaths);
     }
 
     private boolean isController(String content, SourceFile file, String className, String classAnnotationBlock) {
@@ -467,6 +469,6 @@ public class SpringEndpointParser implements CodeParser {
     private record MethodDeclaration(String name, int line, String signature) {
     }
 
-    private record ControllerDeclaration(String className, int classLine, int classStart, List<String> classPaths) {
+    private record ControllerDeclaration(String className, String qualifiedName, int classLine, int classStart, List<String> classPaths) {
     }
 }

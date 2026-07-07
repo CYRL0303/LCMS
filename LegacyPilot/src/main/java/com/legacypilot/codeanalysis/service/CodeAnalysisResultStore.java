@@ -1,8 +1,7 @@
 package com.legacypilot.codeanalysis.service;
 
 import com.legacypilot.codeanalysis.entity.CodeAnalysisResult;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import com.legacypilot.persistence.jdbc.CodeAnalysisSnapshotJdbcRepository;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -16,17 +15,21 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
  */
 @Component
 public class CodeAnalysisResultStore {
-    private final Map<String, CodeAnalysisResult> resultsByRepoId = new ConcurrentHashMap<>();
+    private final CodeAnalysisSnapshotJdbcRepository snapshotJdbcRepository;
+
+    public CodeAnalysisResultStore(CodeAnalysisSnapshotJdbcRepository snapshotJdbcRepository) {
+        this.snapshotJdbcRepository = snapshotJdbcRepository;
+    }
 
     public void save(String repoId, CodeAnalysisResult result) {
-        resultsByRepoId.put(repoId, result);
+        snapshotJdbcRepository.insert(repoId, result);
     }
 
     public CodeAnalysisResult get(String repoId) {
-        CodeAnalysisResult result = resultsByRepoId.get(repoId);
-        if (result == null) {
-            throw new ResponseStatusException(NOT_FOUND, "Code analysis result not found. Run analysis first.");
-        }
-        return result;
+        return snapshotJdbcRepository.findLatestByRepoId(repoId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        NOT_FOUND,
+                        "Code analysis result not found. Run analysis first."
+                ));
     }
 }

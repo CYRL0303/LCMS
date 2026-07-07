@@ -1,0 +1,9 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://mysql:3306/legacypilot}
+    username: ${SPRING_DATASOURCE_USERNAME:legacypilot}
+    password: ${SPRING_DATASOURCE_PASSWORD:legacypilot_pwd}
+
+legacypilot:
+  storage:
+    root: ${LEGACYPILOT_STORAGE_ROOT:/app/source}

@@ -1,29 +1,27 @@
 package com.legacypilot.codeanalysis.parser;
 
 import com.legacypilot.codeanalysis.context.ProjectAnalysisContext;
-import com.legacypilot.codeanalysis.context.SourceFile;
+import com.legacypilot.codeanalysis.entity.CodeEdge;
 import com.legacypilot.codeanalysis.entity.CodeNode;
 import com.legacypilot.codeanalysis.entity.EvidenceRef;
-import java.io.IOException;
-import java.nio.file.Files;
+import com.legacypilot.codeanalysis.parser.java.JavaClassInfo;
+import com.legacypilot.codeanalysis.parser.java.JavaClassKind;
+import com.legacypilot.codeanalysis.parser.java.JavaMethodInfo;
+import com.legacypilot.codeanalysis.parser.java.JavaProjectModel;
+import com.legacypilot.codeanalysis.parser.java.JavaSourceAnalyzer;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
 /**
- * First-pass Java source structure parser.
- *
- * This parser is intentionally isolated so it can later be replaced by
- * JavaParser or Spoon without changing service orchestration.
+ * Builds the base code structure graph from the shared JavaProjectModel.
  */
 @Component
 public class JavaSourceStructureParser implements CodeParser {
-    private static final Pattern PACKAGE_PATTERN = Pattern.compile("\\bpackage\\s+([\\w.]+)\\s*;");
-    private static final Pattern CLASS_PATTERN = Pattern.compile("\\b(class|interface|enum)\\s+(\\w+)\\b");
-    private static final Pattern METHOD_PATTERN = Pattern.compile(
-            "(?m)^\\s*(?:public|protected|private)\\s+(?:static\\s+)?[\\w<>\\[\\], ?]+\\s+(\\w+)\\s*\\([^;{}]*\\)\\s*(?:throws\\s+[\\w., ]+)?\\{"
-    );
+    private final JavaSourceAnalyzer javaSourceAnalyzer;
+
+    public JavaSourceStructureParser(JavaSourceAnalyzer javaSourceAnalyzer) {
+        this.javaSourceAnalyzer = javaSourceAnalyzer;
+    }
 
     @Override
     public boolean supports(ProjectAnalysisContext context) {
@@ -32,80 +30,120 @@ public class JavaSourceStructureParser implements CodeParser {
 
     @Override
     public CodeParseResult parse(ProjectAnalysisContext context) {
+        JavaProjectModel model = javaSourceAnalyzer.analyze(context);
         CodeParseResult.Builder result = CodeParseResult.builder();
-        for (SourceFile file : context.javaFiles()) {
-            parseFile(context, file, result);
+        for (JavaClassInfo classInfo : model.classes()) {
+            addClass(context, result, classInfo);
+            for (JavaMethodInfo method : classInfo.methods()) {
+                addMethod(context, result, classInfo, method);
+            }
         }
         return result.build();
     }
 
-    private void parseFile(ProjectAnalysisContext context, SourceFile file, CodeParseResult.Builder result) {
-        try {
-            String content = Files.readString(file.absolutePath());
-            String packageName = firstGroup(PACKAGE_PATTERN, content);
-            Matcher classMatcher = CLASS_PATTERN.matcher(content);
-            while (classMatcher.find()) {
-                String className = classMatcher.group(2);
-                String qualifiedName = packageName == null ? className : packageName + "." + className;
-                EvidenceRef evidence = evidence(context.repoId(), file.relativePath(), lineNumber(content, classMatcher.start()), className, "java_structure");
-                result.addEvidence(evidence);
-                result.addNode(new CodeNode(
-                        nodeId(context.repoId(), "CLASS", qualifiedName),
-                        "Class",
-                        className,
-                        qualifiedName,
-                        List.of(evidence)
-                ));
-                result.incrementClassCount();
-            }
-
-            Matcher methodMatcher = METHOD_PATTERN.matcher(content);
-            while (methodMatcher.find()) {
-                String methodName = methodMatcher.group(1);
-                EvidenceRef evidence = evidence(context.repoId(), file.relativePath(), lineNumber(content, methodMatcher.start()), methodName, "java_structure");
-                result.addEvidence(evidence);
-                result.addNode(new CodeNode(
-                        nodeId(context.repoId(), "METHOD", file.relativePath() + "#" + methodName),
-                        "Method",
-                        methodName,
-                        file.relativePath() + "#" + methodName,
-                        List.of(evidence)
-                ));
-                result.incrementMethodCount();
-            }
-        } catch (IOException ignored) {
-            // Parser failures should not prevent other parser modules from contributing.
-        }
+    private void addClass(ProjectAnalysisContext context, CodeParseResult.Builder result, JavaClassInfo classInfo) {
+        EvidenceRef evidence = evidence(
+                context.repoId(),
+                classInfo.sourceFile().relativePath(),
+                classInfo.line(),
+                classInfo.simpleName(),
+                "java_structure_class",
+                0.82
+        );
+        result.addEvidence(evidence);
+        result.addNode(new CodeNode(
+                classNodeId(context.repoId(), classInfo),
+                classNodeType(classInfo.kind()),
+                classInfo.simpleName(),
+                classInfo.qualifiedName(),
+                List.of(evidence)
+        ));
+        result.incrementClassCount();
     }
 
-    private String firstGroup(Pattern pattern, String content) {
-        Matcher matcher = pattern.matcher(content);
-        return matcher.find() ? matcher.group(1) : null;
+    private void addMethod(
+            ProjectAnalysisContext context,
+            CodeParseResult.Builder result,
+            JavaClassInfo classInfo,
+            JavaMethodInfo method
+    ) {
+        EvidenceRef evidence = evidence(
+                context.repoId(),
+                classInfo.sourceFile().relativePath(),
+                method.startLine(),
+                method.signature(),
+                "java_structure_method",
+                0.8
+        );
+        result.addEvidence(evidence);
+        result.addNode(new CodeNode(
+                methodNodeId(context.repoId(), classInfo, method.name()),
+                methodNodeType(classInfo.kind()),
+                method.name(),
+                classInfo.qualifiedName() + "." + method.name(),
+                List.of(evidence)
+        ));
+        result.addEdge(new CodeEdge(
+                edgeId(context.repoId(), "DECLARES", classNodeId(context.repoId(), classInfo), methodNodeId(context.repoId(), classInfo, method.name())),
+                classNodeId(context.repoId(), classInfo),
+                methodNodeId(context.repoId(), classInfo, method.name()),
+                "DECLARES",
+                0.82,
+                List.of(evidence)
+        ));
+        result.incrementMethodCount();
     }
 
-    private int lineNumber(String content, int offset) {
-        int line = 1;
-        for (int i = 0; i < offset && i < content.length(); i++) {
-            if (content.charAt(i) == '\n') {
-                line++;
-            }
-        }
-        return line;
+    private String classNodeType(JavaClassKind kind) {
+        return switch (kind) {
+            case CONTROLLER -> "Controller Class";
+            case SERVICE -> "Service Class";
+            case REPOSITORY -> "Repository Class";
+            case MAPPER -> "Mapper Class";
+            case CONFIGURATION -> "Configuration Class";
+            case COMPONENT -> "Component Class";
+            default -> "Class";
+        };
     }
 
-    private EvidenceRef evidence(String repoId, String filePath, int line, String excerpt, String method) {
+    private String methodNodeType(JavaClassKind kind) {
+        return switch (kind) {
+            case CONTROLLER -> "Handler Method";
+            case SERVICE -> "Service Method";
+            case REPOSITORY -> "Repository Method";
+            case MAPPER -> "Mapper Method";
+            default -> "Method";
+        };
+    }
+
+    private String classNodeId(String repoId, JavaClassInfo classInfo) {
+        return repoId + ":CLASS:" + classInfo.qualifiedName();
+    }
+
+    private String methodNodeId(String repoId, JavaClassInfo classInfo, String methodName) {
+        return repoId + ":METHOD:" + classInfo.sourceFile().relativePath() + "#" + methodName;
+    }
+
+    private String edgeId(String repoId, String type, String sourceNodeId, String targetNodeId) {
+        return repoId + ":EDGE:" + type + ":" + sourceNodeId + "->" + targetNodeId;
+    }
+
+    private EvidenceRef evidence(
+            String repoId,
+            String filePath,
+            int line,
+            String excerpt,
+            String method,
+            double confidence
+    ) {
         return new EvidenceRef(
-                repoId + ":EV:" + method + ":" + filePath + ":" + line,
+                repoId + ":EV:" + method + ":" + filePath + ":" + line + ":" + Math.abs(excerpt.hashCode()),
                 filePath,
                 line,
                 line,
                 excerpt,
                 method,
-                0.7
+                confidence
         );
-    }
-
-    private String nodeId(String repoId, String type, String identity) {
-        return repoId + ":" + type + ":" + identity;
     }
 }

@@ -11,6 +11,7 @@ public final class AgentToolCatalog {
     public static final String ENDPOINT_LIST = "endpoint.list";
     public static final String ENDPOINT_LOOKUP = "endpoint.lookup";
     public static final String EVIDENCE_ENDPOINT = "evidence.endpoint";
+    public static final String TRACE_ENDPOINT = "trace.endpoint";
     public static final String CODE_GRAPH_GET_GRAPH = "code_graph.get_graph";
     public static final String CONTEXT_BUILD = "context.build";
     public static final String RCA_INVESTIGATE = "rca.investigate";
@@ -23,6 +24,7 @@ public final class AgentToolCatalog {
             new AgentToolDefinition(ENDPOINT_LIST, "List detected HTTP endpoints for the current repository.", true),
             new AgentToolDefinition(ENDPOINT_LOOKUP, "Resolve one HTTP endpoint to source evidence references.", true),
             new AgentToolDefinition(EVIDENCE_ENDPOINT, "Fetch endpoint source evidence snippets.", true),
+            new AgentToolDefinition(TRACE_ENDPOINT, "Trace one endpoint to handler and downstream method calls.", true),
             new AgentToolDefinition(CODE_GRAPH_GET_GRAPH, "Read the current repository code graph.", true),
             new AgentToolDefinition(CONTEXT_BUILD, "Build compact agent-readable context from tool JSON.", true),
             new AgentToolDefinition(RCA_INVESTIGATE, "Run the current rule-based RCA investigation flow.", true),
