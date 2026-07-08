@@ -1,0 +1,214 @@
+{
+  "status": "NO_EVIDENCE",
+  "attempts": [
+    {
+      "file": "login-null-pointer.log",
+      "alert_id": "local-login-null-pointer",
+      "source": "local-log",
+      "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+      "raw_log_length": 2171,
+      "submit": {
+        "status": 200,
+        "body": {
+          "trace_id": "TRACE-local-login-null-pointer",
+          "repo_id": "ibm-demo",
+          "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+          "error_type": "NullPointerException",
+          "suspected_location": "LoginController.login",
+          "endpoint": "/api/login",
+          "keywords": [],
+          "query_terms": [
+            "NullPointerException",
+            "LoginController.login",
+            "/api/login"
+          ],
+          "contract_version": "1.0.0"
+        },
+        "url": "http://127.0.0.1:18080/api/v1/alerts/submit"
+      },
+      "evidence": {
+        "status": 200,
+        "body": {
+          "trace_id": "TRACE-local-login-null-pointer",
+          "repo_id": "ibm-demo",
+          "contract_version": "1.0.0",
+          "alert_summary": "NullPointerException near LoginController.login",
+          "incident_query": {
+            "trace_id": "TRACE-local-login-null-pointer",
+            "repo_id": "ibm-demo",
+            "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+            "error_type": "NullPointerException",
+            "suspected_location": "LoginController.login",
+            "endpoint": "/api/login",
+            "keywords": [],
+            "query_terms": [
+              "NullPointerException",
+              "LoginController.login",
+              "/api/login"
+            ],
+            "contract_version": "1.0.0"
+          },
+          "matched_nodes": [],
+          "graph_paths": [],
+          "code_evidence": [],
+          "sql_evidence": [],
+          "config_evidence": [],
+          "log_evidence": [],
+          "similar_incidents": [],
+          "missing_evidence": [
+            "matched_nodes",
+            "graph_paths",
+            "evidence_refs"
+          ]
+        },
+        "url": "http://127.0.0.1:18080/api/v1/evidence-bundles/build"
+      },
+      "evidence_count": 0
+    },
+    {
+      "file": "spring-startup-bean-missing.log",
+      "alert_id": "local-spring-startup-bean-missing",
+      "source": "local-log",
+      "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+      "raw_log_length": 3776,
+      "submit": {
+        "status": 200,
+        "body": {
+          "trace_id": "TRACE-local-spring-startup-bean-missing",
+          "repo_id": "ibm-demo",
+          "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+          "error_type": "UnsatisfiedDependencyException",
+          "suspected_location": "BookController.setBookService",
+          "endpoint": "/api/books/list",
+          "keywords": [],
+          "query_terms": [
+            "UnsatisfiedDependencyException",
+            "BookController.setBookService",
+            "/api/books/list"
+          ],
+          "contract_version": "1.0.0"
+        },
+        "url": "http://127.0.0.1:18080/api/v1/alerts/submit"
+      },
+      "evidence": {
+        "status": 200,
+        "body": {
+          "trace_id": "TRACE-local-spring-startup-bean-missing",
+          "repo_id": "ibm-demo",
+          "contract_version": "1.0.0",
+          "alert_summary": "UnsatisfiedDependencyException near BookController.setBookService",
+          "incident_query": {
+            "trace_id": "TRACE-local-spring-startup-bean-missing",
+            "repo_id": "ibm-demo",
+            "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+            "error_type": "UnsatisfiedDependencyException",
+            "suspected_location": "BookController.setBookService",
+            "endpoint": "/api/books/list",
+            "keywords": [],
+            "query_terms": [
+              "UnsatisfiedDependencyException",
+              "BookController.setBookService",
+              "/api/books/list"
+            ],
+            "contract_version": "1.0.0"
+          },
+          "matched_nodes": [],
+          "graph_paths": [],
+          "code_evidence": [],
+          "sql_evidence": [],
+          "config_evidence": [],
+          "log_evidence": [],
+          "similar_incidents": [],
+          "missing_evidence": [
+            "matched_nodes",
+            "graph_paths",
+            "evidence_refs"
+          ]
+        },
+        "url": "http://127.0.0.1:18080/api/v1/evidence-bundles/build"
+      },
+      "evidence_count": 0
+    },
+    {
+      "file": "book-query-sql-error.log",
+      "alert_id": "local-book-query-sql-error",
+      "source": "local-log",
+      "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+      "raw_log_length": 3244,
+      "submit": {
+        "status": 200,
+        "body": {
+          "trace_id": "TRACE-local-book-query-sql-error",
+          "repo_id": "ibm-demo",
+          "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+          "error_type": "BadSqlGrammarException",
+          "suspected_location": "BookMapper.selectAvailableBooks",
+          "endpoint": "/api/books/search",
+          "keywords": [
+            "book"
+          ],
+          "query_terms": [
+            "BadSqlGrammarException",
+            "BookMapper.selectAvailableBooks",
+            "/api/books/search",
+            "book"
+          ],
+          "contract_version": "1.0.0"
+        },
+        "url": "http://127.0.0.1:18080/api/v1/alerts/submit"
+      },
+      "evidence": {
+        "status": 200,
+        "body": {
+          "trace_id": "TRACE-local-book-query-sql-error",
+          "repo_id": "ibm-demo",
+          "contract_version": "1.0.0",
+          "alert_summary": "BadSqlGrammarException near BookMapper.selectAvailableBooks",
+          "incident_query": {
+            "trace_id": "TRACE-local-book-query-sql-error",
+            "repo_id": "ibm-demo",
+            "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+            "error_type": "BadSqlGrammarException",
+            "suspected_location": "BookMapper.selectAvailableBooks",
+            "endpoint": "/api/books/search",
+            "keywords": [
+              "book"
+            ],
+            "query_terms": [
+              "BadSqlGrammarException",
+              "BookMapper.selectAvailableBooks",
+              "/api/books/search",
+              "book"
+            ],
+            "contract_version": "1.0.0"
+          },
+          "matched_nodes": [],
+          "graph_paths": [],
+          "code_evidence": [],
+          "sql_evidence": [],
+          "config_evidence": [],
+          "log_evidence": [],
+          "similar_incidents": [],
+          "missing_evidence": [
+            "matched_nodes",
+            "graph_paths",
+            "evidence_refs"
+          ]
+        },
+        "url": "http://127.0.0.1:18080/api/v1/evidence-bundles/build"
+      },
+      "evidence_count": 0
+    }
+  ],
+  "screenshots": [
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\fresh-after-import-login-null-pointer.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\fresh-incident-query-login-null-pointer.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\fresh-evidence-login-null-pointer.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\fresh-after-import-spring-startup-bean-missing.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\fresh-incident-query-spring-startup-bean-missing.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\fresh-evidence-spring-startup-bean-missing.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\fresh-after-import-book-query-sql-error.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\fresh-incident-query-book-query-sql-error.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\fresh-evidence-book-query-sql-error.png"
+  ]
+}

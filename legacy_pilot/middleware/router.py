@@ -121,6 +121,29 @@ class MiddlewareRouter:
             for record in records
         ]
 
+    def load_graph_snapshot(self, *, repo_id: str, graph_id: str) -> GraphSnapshot:
+        try:
+            snapshot = self._code_knowledge_core_adapter.load_graph_snapshot(
+                repo_id=repo_id,
+                graph_id=graph_id,
+            )
+        except CodeKnowledgeCoreError as exc:
+            raise self._code_knowledge_core_error(
+                trace_id=None,
+                error=exc,
+            ) from exc
+        if snapshot is None:
+            raise ContractViolation(
+                ContractError(
+                    trace_id=None,
+                    error_code=ErrorCode.VALIDATION_ERROR,
+                    message=f"GraphSnapshot not found: {repo_id}/{graph_id}",
+                    source_module="code_knowledge_core",
+                    recoverable=True,
+                )
+            )
+        return snapshot
+
     def delete_graph(self, *, repo_id: str, graph_id: str) -> DeleteGraphResponse:
         incident_count = self._incident_count_for_graph(
             repo_id=repo_id,

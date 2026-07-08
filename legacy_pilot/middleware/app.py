@@ -138,6 +138,10 @@ def create_app(router: MiddlewareRouter | None = None) -> FastAPI:
     async def list_graphs() -> list[StoredGraph]:
         return middleware_router.list_graphs()
 
+    @app.get("/v1/graphs/{repo_id}/{graph_id}", response_model=GraphSnapshot)
+    async def load_graph_snapshot(repo_id: str, graph_id: str) -> GraphSnapshot:
+        return middleware_router.load_graph_snapshot(repo_id=repo_id, graph_id=graph_id)
+
     @app.delete("/v1/graphs/{repo_id}/{graph_id}", response_model=DeleteGraphResponse)
     async def delete_graph(repo_id: str, graph_id: str) -> DeleteGraphResponse:
         return middleware_router.delete_graph(repo_id=repo_id, graph_id=graph_id)

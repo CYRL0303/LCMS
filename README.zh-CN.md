@@ -438,6 +438,7 @@ Hackathon demo 可用 compose 内 PostgreSQL + ECS cloud disk。产品数据建�
 - `POST /v1/repos/index`
 - `POST /v1/graph/query`
 - `GET /v1/graphs`
+- `GET /v1/graphs/{repo_id}/{graph_id}`
 - `DELETE /v1/graphs/{repo_id}/{graph_id}`
 - `POST /v1/alerts/submit`
 - `POST /v1/alerts/webhook/generic`

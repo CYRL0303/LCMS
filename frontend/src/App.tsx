@@ -39,6 +39,7 @@ import {
   defaultRepoRequest,
   defaultSaveRequest,
 } from "./defaults";
+import { GraphVisualizer } from "./GraphVisualizer";
 import type {
   AlertEvent,
   ContractError,
@@ -192,6 +193,8 @@ export function App() {
   const [graphListError, setGraphListError] = useState<string | null>(null);
   const [graphDeleteTarget, setGraphDeleteTarget] = useState<StoredGraph | null>(null);
   const [graphDeleteRunning, setGraphDeleteRunning] = useState(false);
+  const [existingGraphLoadRunning, setExistingGraphLoadRunning] = useState(false);
+  const [hasAutoLoadedStoredGraph, setHasAutoLoadedStoredGraph] = useState(false);
   const [alertInputMode, setAlertInputMode] = useState<AlertInputMode>("manual");
   const [localLogImportStatus, setLocalLogImportStatus] = useState<string | null>(null);
 
@@ -202,6 +205,31 @@ export function App() {
   useEffect(() => {
     saveWorkbenchSettings(settings);
   }, [settings]);
+
+  useEffect(() => {
+    if (hasAutoLoadedStoredGraph || snapshot || storedGraphs.length === 0) {
+      return;
+    }
+    if (
+      repoRequest.repo_id.trim() ||
+      repoRequest.repo_uri.trim() ||
+      alertEvent.repo_id.trim() ||
+      alertEvent.graph_id?.trim()
+    ) {
+      return;
+    }
+    const firstGraph = storedGraphs[0];
+    setHasAutoLoadedStoredGraph(true);
+    autoLoadStoredGraph(firstGraph);
+  }, [
+    alertEvent.graph_id,
+    alertEvent.repo_id,
+    hasAutoLoadedStoredGraph,
+    repoRequest.repo_id,
+    repoRequest.repo_uri,
+    snapshot,
+    storedGraphs,
+  ]);
 
   const apiCredentials = useMemo(() => runtimeCredentials(settings), [settings]);
   const apiOptions = useMemo(
@@ -246,7 +274,8 @@ export function App() {
     (key) => key !== "health" && stepLogs[key].status === "running",
   );
   const isUsingExistingGraphRunning =
-    isPipelineRunning && Boolean(alertEvent.graph_id?.trim()) && !repoRequest.repo_uri.trim();
+    existingGraphLoadRunning ||
+    (isPipelineRunning && Boolean(alertEvent.graph_id?.trim()) && !repoRequest.repo_uri.trim());
   const isHealthRunning = stepLogs.health.status === "running";
   const isIndexing = stepLogs.index.status === "running";
   const isSubmittingAlert = stepLogs.submit.status === "running";
@@ -282,6 +311,35 @@ export function App() {
     }
   }
 
+  async function loadGraphSnapshotFor(
+    rawRepoId: string,
+    rawGraphId: string,
+  ): Promise<GraphSnapshot | null> {
+    const repoId = rawRepoId.trim();
+    const graphId = rawGraphId.trim();
+    if (!repoId || !graphId) {
+      return null;
+    }
+    setExistingGraphLoadRunning(true);
+    setGraphListError(null);
+    try {
+      const result = await getJson<GraphSnapshot>(
+        `/v1/graphs/${encodeURIComponent(repoId)}/${encodeURIComponent(graphId)}`,
+        apiOptions,
+      );
+      setSnapshot(result.data);
+      setGraphListStatus("idle");
+      return result.data;
+    } catch (error) {
+      const unpacked = unpackError(error);
+      setGraphListError(unpacked.body.message);
+      setGraphListStatus("failed");
+      return null;
+    } finally {
+      setExistingGraphLoadRunning(false);
+    }
+  }
+
   async function runIndex(): Promise<GraphSnapshot | null> {
     const request = normalizeRepoRequest(repoRequest);
     return runStep<GraphSnapshot>(
@@ -300,20 +358,70 @@ export function App() {
     );
   }
 
-  function skipIndex() {
-    setSnapshot(null);
+  async function useExistingGraph() {
+    const repoId = alertEvent.repo_id.trim();
+    const graphId = alertEvent.graph_id?.trim() || "";
+    const loaded =
+      snapshot?.repo_id === repoId && snapshot.graph_id === graphId
+        ? snapshot
+        : await loadGraphSnapshotFor(repoId, graphId);
+    if (!loaded) {
+      return;
+    }
     updateStep("index", {
       status: "skipped",
-      request: null,
+      request: {
+        repo_id: repoId,
+        graph_id: graphId,
+      },
       response: {
-        graph_id: alertEvent.graph_id || null,
-        note: "Using graph_id from AlertEvent.",
+        graph_id: loaded.graph_id,
+        repo_id: loaded.repo_id,
+        nodes: loaded.nodes.length,
+        edges: loaded.edges.length,
+        note: "Using persisted GraphSnapshot.",
       },
       error: undefined,
       httpStatus: undefined,
       elapsedMs: undefined,
     });
     clearPipelineAfter("index");
+  }
+
+  function autoLoadStoredGraph(firstGraph: StoredGraph) {
+    setRepoRequest((current) => ({
+      ...current,
+      repo_id: firstGraph.repo_id,
+    }));
+    setAlertEvent((current) => ({
+      ...current,
+      repo_id: firstGraph.repo_id,
+      graph_id: firstGraph.graph_id,
+    }));
+    void loadGraphSnapshotFor(firstGraph.repo_id, firstGraph.graph_id).then((loaded) => {
+      if (!loaded) {
+        setHasAutoLoadedStoredGraph(false);
+        return;
+      }
+      updateStep("index", {
+        status: "skipped",
+        request: {
+          repo_id: firstGraph.repo_id,
+          graph_id: firstGraph.graph_id,
+        },
+        response: {
+          graph_id: loaded.graph_id,
+          repo_id: loaded.repo_id,
+          nodes: loaded.nodes.length,
+          edges: loaded.edges.length,
+          note: "Auto-loaded persisted GraphSnapshot.",
+        },
+        error: undefined,
+        httpStatus: undefined,
+        elapsedMs: undefined,
+      });
+      clearPipelineAfter("index");
+    });
   }
 
   function selectStoredGraph(graph: StoredGraph) {
@@ -326,8 +434,8 @@ export function App() {
       repo_id: graph.repo_id,
       graph_id: graph.graph_id,
     }));
-    setSnapshot(null);
     clearPipelineAfter("index");
+    void loadGraphSnapshotFor(graph.repo_id, graph.graph_id);
   }
 
   async function confirmDeleteGraph() {
@@ -603,6 +711,7 @@ export function App() {
     setReviewedReport(null);
     setIncidentRecord(null);
     setPersistedIncidentRecord(null);
+    setHasAutoLoadedStoredGraph(false);
     void runHealth();
   }
 
@@ -740,7 +849,7 @@ export function App() {
             onReloadGraphs={() => void loadStoredGraphs()}
             onRequestDeleteGraph={setGraphDeleteTarget}
             onSelectGraph={selectStoredGraph}
-            onSkip={skipIndex}
+            onSkip={() => void useExistingGraph()}
           />
           <AlertForm
             value={alertEvent}
@@ -780,6 +889,7 @@ export function App() {
             </button>
           </div>
           <SnapshotSummary snapshot={snapshot} />
+          <GraphVisualizer snapshot={snapshot} bundle={bundle} />
           <IncidentQuerySummary query={incidentQuery} />
           <EvidenceBundleView bundle={bundle} />
           <div className="inline-actions">

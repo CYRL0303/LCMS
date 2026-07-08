@@ -7,6 +7,7 @@ from legacy_pilot.code_knowledge_core.adapter import (
 )
 from legacy_pilot.code_knowledge_core.graph_store import GraphStoreRecord
 from legacy_pilot.contracts.models import (
+    Edge,
     EvidenceRef,
     GraphContext,
     GraphQuery,
@@ -14,6 +15,7 @@ from legacy_pilot.contracts.models import (
     IncidentMatch,
     IncidentQuery,
     IncidentRecord,
+    Node,
     RepoIndexRequest,
 )
 from legacy_pilot.incident_memory_store.adapter import IncidentMemoryStoreAdapter
@@ -77,6 +79,58 @@ class ApiFakeAdapter(CodeKnowledgeCoreAdapter):
                 edge_count=2,
             )
         ]
+
+    def load_graph_snapshot(self, *, repo_id: str, graph_id: str) -> GraphSnapshot | None:
+        evidence = EvidenceRef(
+            evidence_id="EV-GRAPH-X",
+            trace_id="TRACE-GRAPH-X",
+            source_type="code",
+            source_id="DatasetService.java",
+            file_path="src/main/java/DatasetService.java",
+            start_line=40,
+            end_line=45,
+            excerpt="return datasetMapper.selectVersionById(req.getDatasetId());",
+            extraction_method="java_parser",
+            confidence=0.95,
+            created_at=datetime(2026, 6, 30, 10, 5, tzinfo=UTC),
+        )
+        service = Node(
+            node_id="NODE-SERVICE",
+            graph_id=graph_id,
+            repo_id=repo_id,
+            type="Method",
+            name="DatasetService.getVersion",
+            qualified_name="com.legacy.DatasetService.getVersion",
+            evidence_refs=[evidence],
+        )
+        mapper = Node(
+            node_id="NODE-MAPPER",
+            graph_id=graph_id,
+            repo_id=repo_id,
+            type="Mapper",
+            name="DatasetMapper.selectVersionById",
+            qualified_name="com.legacy.DatasetMapper.selectVersionById",
+            evidence_refs=[evidence],
+        )
+        return GraphSnapshot(
+            graph_id=graph_id,
+            repo_id=repo_id,
+            nodes=[service, mapper],
+            edges=[
+                Edge(
+                    edge_id="EDGE-SERVICE-MAPPER",
+                    graph_id=graph_id,
+                    source_node_id=service.node_id,
+                    target_node_id=mapper.node_id,
+                    type="USES_MAPPER",
+                    confidence=0.91,
+                    extraction_method="java_parser",
+                    evidence_refs=[evidence],
+                )
+            ],
+            evidence_refs=[evidence],
+            generated_at=datetime(2026, 6, 30, 10, 5, tzinfo=UTC),
+        )
 
     def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
         self.deleted_graphs.append((repo_id, graph_id))
@@ -474,6 +528,27 @@ def test_graph_list_endpoint_returns_stored_graphs_with_incident_counts():
             "incident_memory_count": 1,
         }
     ]
+
+
+def test_graph_read_endpoint_returns_full_snapshot_for_existing_graph():
+    adapter = ApiFakeAdapter()
+    router = MiddlewareRouter(
+        code_knowledge_core_adapter=adapter,
+        incident_memory_store_adapter=ApiMemoryStoreAdapter(),
+    )
+    client = TestClient(create_app(router=router))
+
+    response = client.get("/v1/graphs/repo-demo/GRAPH-X")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["repo_id"] == "repo-demo"
+    assert body["graph_id"] == "GRAPH-X"
+    assert [node["node_id"] for node in body["nodes"]] == [
+        "NODE-SERVICE",
+        "NODE-MAPPER",
+    ]
+    assert body["edges"][0]["type"] == "USES_MAPPER"
 
 
 def test_graph_delete_endpoint_blocks_graph_referenced_by_incident_memory():

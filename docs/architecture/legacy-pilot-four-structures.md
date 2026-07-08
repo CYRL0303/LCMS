@@ -466,7 +466,8 @@ MVP/mock notes elsewhere in this file where they conflict.
 - Structure 1 owns PostgreSQL graph payload persistence. Other structures must
   consume graph data only through `QueryGraph`; they must not connect directly
   to the graph store.
-- Middleware exposes `GET /v1/graphs` and
+- Middleware exposes `GET /v1/graphs`,
+  `GET /v1/graphs/{repo_id}/{graph_id}`, and
   `DELETE /v1/graphs/{repo_id}/{graph_id}`. Deleting a graph is blocked when
   Structure 4 has incident memory rows referencing that graph.
 - Structure 2 passes `EvidenceBundle.incident_query.graph_id` forward. Structure

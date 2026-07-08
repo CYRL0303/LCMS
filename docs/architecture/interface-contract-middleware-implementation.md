@@ -606,6 +606,8 @@ Current request/response contract additions:
   evidence.
 - `StoredGraph` is returned by `GET /v1/graphs` and includes
   `incident_memory_count`.
+- `GraphSnapshot` is returned by `GET /v1/graphs/{repo_id}/{graph_id}` so the
+  frontend can visualize an existing persisted graph without re-indexing.
 - `DeleteGraphResponse` is returned by
   `DELETE /v1/graphs/{repo_id}/{graph_id}`.
 
@@ -616,6 +618,7 @@ GET    /health
 POST   /v1/repos/index
 POST   /v1/graph/query
 GET    /v1/graphs
+GET    /v1/graphs/{repo_id}/{graph_id}
 DELETE /v1/graphs/{repo_id}/{graph_id}
 POST   /v1/alerts/submit
 POST   /v1/alerts/webhook/generic

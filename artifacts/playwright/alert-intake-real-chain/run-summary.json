@@ -1,0 +1,466 @@
+{
+  "status": "FAIL",
+  "url": "http://127.0.0.1:18080/",
+  "started_at": "2026-07-03T06:38:52.890Z",
+  "click_path": [
+    "Open http://127.0.0.1:18080/",
+    "Click Health",
+    "Click Existing graphs picker",
+    "Select ibm-demo / GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+    "Click Use existing graph",
+    "Click Import local log",
+    "Upload spring-startup-bean-missing.log via Log files input",
+    "Click Submit alert for spring-startup-bean-missing.log",
+    "Click Import local log",
+    "Upload login-null-pointer.log via Log files input",
+    "Click Submit alert for login-null-pointer.log",
+    "Click Import local log",
+    "Upload book-query-sql-error.log via Log files input",
+    "Click Submit alert for book-query-sql-error.log",
+    "Click Build evidence for book-query-sql-error.log",
+    "Click Generate RCA",
+    "Click Review RCA"
+  ],
+  "health": {
+    "page_status": 200,
+    "initial_response": {
+      "service": "legacy-pilot-interface-contract-middleware",
+      "contract_version": "1.0.0",
+      "backends": {
+        "code_knowledge_core": "gitnexus_cli",
+        "incident_context_builder": "graph_context",
+        "rca_reasoning_engine": "qwen_api",
+        "incident_memory_store": "postgresql"
+      }
+    },
+    "refreshed_response": {
+      "service": "legacy-pilot-interface-contract-middleware",
+      "contract_version": "1.0.0",
+      "backends": {
+        "code_knowledge_core": "gitnexus_cli",
+        "incident_context_builder": "graph_context",
+        "rca_reasoning_engine": "qwen_api",
+        "incident_memory_store": "postgresql"
+      }
+    },
+    "ui_contains_proxied_real_backend": true,
+    "ui_backends": [
+      "gitnexus_cli",
+      "graph_context",
+      "qwen_api",
+      "postgresql"
+    ],
+    "health_status_text": ""
+  },
+  "graph": {
+    "repo_id": "ibm-demo",
+    "graph_id_field": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+    "selected_button": "ibm-demo / GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648 / 2026/7/1 11:56:58"
+  },
+  "logs": [
+    {
+      "file": "spring-startup-bean-missing.log",
+      "import_form": {
+        "alert_id": "local-spring-startup-bean-missing",
+        "source": "local-log",
+        "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+        "raw_log_length": 3776,
+        "raw_log_head": "===== spring-startup-bean-missing.log =====\n2026-07-03 08:14:22.481 ERROR 14216 --- [           main] o.s.boot.SpringApplication               : Application run failed\n\norg.springframework.beans.factory.UnsatisfiedDependencyException: Error",
+        "stack_trace_length": 0,
+        "error_description": "",
+        "occurred_at": "2026-07-03T06:17:19.457Z",
+        "submit_disabled": false
+      },
+      "submit_status": 200,
+      "incident_query_visible": true,
+      "incident_query": {
+        "trace_id": "TRACE-local-spring-startup-bean-missing",
+        "repo_id": "ibm-demo",
+        "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+        "error_type": "UnsatisfiedDependencyException",
+        "suspected_location": "BookController.setBookService",
+        "endpoint": "/api/books/list",
+        "keywords": [],
+        "query_terms": [
+          "UnsatisfiedDependencyException",
+          "BookController.setBookService",
+          "/api/books/list"
+        ],
+        "contract_version": "1.0.0"
+      },
+      "expected_error_type": "UnsatisfiedDependencyException",
+      "expected_terms_any_of": [
+        "BookController",
+        "BookService"
+      ],
+      "validation": {
+        "error_type_ok": true,
+        "terms_ok": true,
+        "haystack": "UnsatisfiedDependencyException | BookController.setBookService | /api/books/list | UnsatisfiedDependencyException | BookController.setBookService | /api/books/list"
+      }
+    },
+    {
+      "file": "login-null-pointer.log",
+      "import_form": {
+        "alert_id": "local-spring-startup-bean-missing",
+        "source": "local-log",
+        "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+        "raw_log_length": 2171,
+        "raw_log_head": "===== login-null-pointer.log =====\n2026-07-03 10:03:45.317 ERROR 24608 --- [nio-8080-exec-3] c.l.ibm.controller.LoginController       : Login request failed for endpoint POST /api/login\n\njava.lang.NullPointerException: Cannot invoke \"com.ls",
+        "stack_trace_length": 0,
+        "error_description": "",
+        "occurred_at": "2026-07-03T06:17:19.693Z",
+        "submit_disabled": false
+      },
+      "submit_status": 200,
+      "incident_query_visible": true,
+      "incident_query": {
+        "trace_id": "TRACE-local-spring-startup-bean-missing",
+        "repo_id": "ibm-demo",
+        "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+        "error_type": "NullPointerException",
+        "suspected_location": "LoginController.login",
+        "endpoint": "/api/login",
+        "keywords": [],
+        "query_terms": [
+          "NullPointerException",
+          "LoginController.login",
+          "/api/login"
+        ],
+        "contract_version": "1.0.0"
+      },
+      "expected_error_type": "NullPointerException",
+      "expected_terms_any_of": [
+        "LoginController",
+        "UserService"
+      ],
+      "validation": {
+        "error_type_ok": true,
+        "terms_ok": true,
+        "haystack": "NullPointerException | LoginController.login | /api/login | NullPointerException | LoginController.login | /api/login"
+      }
+    },
+    {
+      "file": "book-query-sql-error.log",
+      "import_form": {
+        "alert_id": "local-spring-startup-bean-missing",
+        "source": "local-log",
+        "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+        "raw_log_length": 3244,
+        "raw_log_head": "===== book-query-sql-error.log =====\n2026-07-03 09:27:11.902 ERROR 24608 --- [nio-8080-exec-7] c.l.ibm.controller.BookController        : Request failed: GET /api/books/search?keyword=database&status=AVAILABLE\n\norg.springframework.jdbc.BadS",
+        "stack_trace_length": 0,
+        "error_description": "",
+        "occurred_at": "2026-07-03T06:17:19.580Z",
+        "submit_disabled": false
+      },
+      "submit_status": 200,
+      "incident_query_visible": true,
+      "incident_query": {
+        "trace_id": "TRACE-local-spring-startup-bean-missing",
+        "repo_id": "ibm-demo",
+        "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+        "error_type": "BadSqlGrammarException",
+        "suspected_location": "BookMapper.selectAvailableBooks",
+        "endpoint": "/api/books/search",
+        "keywords": [
+          "book"
+        ],
+        "query_terms": [
+          "BadSqlGrammarException",
+          "BookMapper.selectAvailableBooks",
+          "/api/books/search",
+          "book"
+        ],
+        "contract_version": "1.0.0"
+      },
+      "expected_error_type": "BadSqlGrammarException",
+      "expected_terms_any_of": [
+        "BookMapper",
+        "BookService",
+        "book"
+      ],
+      "validation": {
+        "error_type_ok": true,
+        "terms_ok": true,
+        "haystack": "BadSqlGrammarException | BookMapper.selectAvailableBooks | /api/books/search | BadSqlGrammarException | BookMapper.selectAvailableBooks | /api/books/search | book"
+      }
+    }
+  ],
+  "pipeline": {
+    "evidence": {
+      "status": 200,
+      "body": {
+        "trace_id": "TRACE-local-spring-startup-bean-missing",
+        "repo_id": "ibm-demo",
+        "contract_version": "1.0.0",
+        "alert_summary": "BadSqlGrammarException near BookMapper.selectAvailableBooks",
+        "incident_query": {
+          "trace_id": "TRACE-local-spring-startup-bean-missing",
+          "repo_id": "ibm-demo",
+          "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+          "error_type": "BadSqlGrammarException",
+          "suspected_location": "BookMapper.selectAvailableBooks",
+          "endpoint": "/api/books/search",
+          "keywords": [
+            "book"
+          ],
+          "query_terms": [
+            "BadSqlGrammarException",
+            "BookMapper.selectAvailableBooks",
+            "/api/books/search",
+            "book"
+          ],
+          "contract_version": "1.0.0"
+        },
+        "matched_nodes": [],
+        "graph_paths": [],
+        "code_evidence": [],
+        "sql_evidence": [],
+        "config_evidence": [],
+        "log_evidence": [],
+        "similar_incidents": [],
+        "missing_evidence": [
+          "matched_nodes",
+          "graph_paths",
+          "evidence_refs"
+        ]
+      },
+      "ui_visible": true
+    },
+    "rca": {
+      "status": 400,
+      "body": {
+        "trace_id": "TRACE-local-spring-startup-bean-missing",
+        "error_code": "EVIDENCE_REQUIRED",
+        "message": "EvidenceBundle must contain evidence before RCA generation.",
+        "source_module": "rca_reasoning_engine",
+        "recoverable": true,
+        "missing_fields": [],
+        "evidence_refs": []
+      },
+      "ui_visible": true
+    }
+  },
+  "screenshots": [
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\01-health.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\02-graph-selected.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\03-after-import-spring-startup-bean-missing.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\04-incident-query-spring-startup-bean-missing.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\03-after-import-login-null-pointer.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\04-incident-query-login-null-pointer.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\03-after-import-book-query-sql-error.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\04-incident-query-book-query-sql-error.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\05-evidence-or-rca-evidence.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\06-evidence-or-rca-generated.png",
+    "Q:\\Hackathons\\QWENHack\\artifacts\\playwright\\alert-intake-real-chain\\99-error.png"
+  ],
+  "api_responses": [
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:18080/api/health",
+      "status": 200,
+      "observed": true
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:18080/api/v1/graphs",
+      "status": 200,
+      "observed": true
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:18080/api/health",
+      "status": 200,
+      "observed": true
+    },
+    {
+      "apiPath": "/api/health",
+      "method": "GET",
+      "url": "http://127.0.0.1:18080/api/health",
+      "status": 200,
+      "body": {
+        "service": "legacy-pilot-interface-contract-middleware",
+        "contract_version": "1.0.0",
+        "backends": {
+          "code_knowledge_core": "gitnexus_cli",
+          "incident_context_builder": "graph_context",
+          "rca_reasoning_engine": "qwen_api",
+          "incident_memory_store": "postgresql"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:18080/api/v1/graphs",
+      "status": 200,
+      "observed": true
+    },
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:18080/api/v1/alerts/submit",
+      "status": 200,
+      "observed": true
+    },
+    {
+      "apiPath": "/api/v1/alerts/submit",
+      "method": "POST",
+      "url": "http://127.0.0.1:18080/api/v1/alerts/submit",
+      "status": 200,
+      "body": {
+        "trace_id": "TRACE-local-spring-startup-bean-missing",
+        "repo_id": "ibm-demo",
+        "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+        "error_type": "UnsatisfiedDependencyException",
+        "suspected_location": "BookController.setBookService",
+        "endpoint": "/api/books/list",
+        "keywords": [],
+        "query_terms": [
+          "UnsatisfiedDependencyException",
+          "BookController.setBookService",
+          "/api/books/list"
+        ],
+        "contract_version": "1.0.0"
+      }
+    },
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:18080/api/v1/alerts/submit",
+      "status": 200,
+      "observed": true
+    },
+    {
+      "apiPath": "/api/v1/alerts/submit",
+      "method": "POST",
+      "url": "http://127.0.0.1:18080/api/v1/alerts/submit",
+      "status": 200,
+      "body": {
+        "trace_id": "TRACE-local-spring-startup-bean-missing",
+        "repo_id": "ibm-demo",
+        "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+        "error_type": "NullPointerException",
+        "suspected_location": "LoginController.login",
+        "endpoint": "/api/login",
+        "keywords": [],
+        "query_terms": [
+          "NullPointerException",
+          "LoginController.login",
+          "/api/login"
+        ],
+        "contract_version": "1.0.0"
+      }
+    },
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:18080/api/v1/alerts/submit",
+      "status": 200,
+      "observed": true
+    },
+    {
+      "apiPath": "/api/v1/alerts/submit",
+      "method": "POST",
+      "url": "http://127.0.0.1:18080/api/v1/alerts/submit",
+      "status": 200,
+      "body": {
+        "trace_id": "TRACE-local-spring-startup-bean-missing",
+        "repo_id": "ibm-demo",
+        "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+        "error_type": "BadSqlGrammarException",
+        "suspected_location": "BookMapper.selectAvailableBooks",
+        "endpoint": "/api/books/search",
+        "keywords": [
+          "book"
+        ],
+        "query_terms": [
+          "BadSqlGrammarException",
+          "BookMapper.selectAvailableBooks",
+          "/api/books/search",
+          "book"
+        ],
+        "contract_version": "1.0.0"
+      }
+    },
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:18080/api/v1/evidence-bundles/build",
+      "status": 200,
+      "observed": true
+    },
+    {
+      "apiPath": "/api/v1/evidence-bundles/build",
+      "method": "POST",
+      "url": "http://127.0.0.1:18080/api/v1/evidence-bundles/build",
+      "status": 200,
+      "body": {
+        "trace_id": "TRACE-local-spring-startup-bean-missing",
+        "repo_id": "ibm-demo",
+        "contract_version": "1.0.0",
+        "alert_summary": "BadSqlGrammarException near BookMapper.selectAvailableBooks",
+        "incident_query": {
+          "trace_id": "TRACE-local-spring-startup-bean-missing",
+          "repo_id": "ibm-demo",
+          "graph_id": "GRAPH-ibm-demo-20260701T155658782535Z-26f85f63a648",
+          "error_type": "BadSqlGrammarException",
+          "suspected_location": "BookMapper.selectAvailableBooks",
+          "endpoint": "/api/books/search",
+          "keywords": [
+            "book"
+          ],
+          "query_terms": [
+            "BadSqlGrammarException",
+            "BookMapper.selectAvailableBooks",
+            "/api/books/search",
+            "book"
+          ],
+          "contract_version": "1.0.0"
+        },
+        "matched_nodes": [],
+        "graph_paths": [],
+        "code_evidence": [],
+        "sql_evidence": [],
+        "config_evidence": [],
+        "log_evidence": [],
+        "similar_incidents": [],
+        "missing_evidence": [
+          "matched_nodes",
+          "graph_paths",
+          "evidence_refs"
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:18080/api/v1/rca/generate",
+      "status": 400,
+      "observed": true
+    },
+    {
+      "apiPath": "/api/v1/rca/generate",
+      "method": "POST",
+      "url": "http://127.0.0.1:18080/api/v1/rca/generate",
+      "status": 400,
+      "body": {
+        "trace_id": "TRACE-local-spring-startup-bean-missing",
+        "error_code": "EVIDENCE_REQUIRED",
+        "message": "EvidenceBundle must contain evidence before RCA generation.",
+        "source_module": "rca_reasoning_engine",
+        "recoverable": true,
+        "missing_fields": [],
+        "evidence_refs": []
+      }
+    }
+  ],
+  "console": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 400 (Bad Request)"
+    }
+  ],
+  "issues": [
+    {
+      "area": "environment",
+      "issue": "page.waitForFunction: Timeout 120000ms exceeded.",
+      "stack": "page.waitForFunction: Timeout 120000ms exceeded.\n    at [stdin]:189:16"
+    }
+  ],
+  "finished_at": "2026-07-03T06:41:05.161Z"
+}

@@ -249,10 +249,12 @@ queryable plans with no process-local index, it reloads the payload from
 PostgreSQL and rebuilds the local index. Other LegacyPilot structures must not
 connect to this database directly; they still use `/v1/graph/query`.
 
-Persisted graph records can be listed through `GET /v1/graphs`. `DELETE
-/v1/graphs/{repo_id}/{graph_id}` removes a graph payload only when no incident
-memory row references that graph. A blocked delete returns a recoverable
-`RESOURCE_IN_USE` contract error with the referencing incident count.
+Persisted graph records can be listed through `GET /v1/graphs`. A full persisted
+`GraphSnapshot` can be loaded through `GET /v1/graphs/{repo_id}/{graph_id}` for
+frontend visualization without re-indexing. `DELETE /v1/graphs/{repo_id}/{graph_id}`
+removes a graph payload only when no incident memory row references that graph.
+A blocked delete returns a recoverable `RESOURCE_IN_USE` contract error with the
+referencing incident count.
 
 The real PostgreSQL integration test is opt-in. Set
 `LEGACY_PILOT_RUN_POSTGRES_GRAPH_STORE=1` and
@@ -588,6 +590,7 @@ Compose demo is stable.
 - `POST /v1/repos/index`
 - `POST /v1/graph/query`
 - `GET /v1/graphs`
+- `GET /v1/graphs/{repo_id}/{graph_id}`
 - `DELETE /v1/graphs/{repo_id}/{graph_id}`
 - `POST /v1/alerts/submit`
 - `POST /v1/alerts/webhook/generic`

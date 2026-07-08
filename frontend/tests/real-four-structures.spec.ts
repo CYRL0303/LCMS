@@ -63,6 +63,12 @@ test("runs the real four-structure incident pipeline from the workbench", async 
     timeout: 180_000,
   });
   await expect(page.getByTestId("snapshot-summary")).toContainText("nodes");
+  await expect(page.getByTestId("graph-visualizer")).toContainText("Graph Visualizer");
+  await expect(page.locator(".graph-node").first()).toBeVisible();
+  await expect(page.locator(".graph-edge").first()).toBeVisible();
+  await page.getByTestId("graph-layer-raw").click();
+  await expect(page.getByTestId("graph-layer-raw")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("graph-layer-overview").click();
 
   const logPath = testInfo.outputPath("sample-incident.log");
   await fs.promises.writeFile(

@@ -91,6 +91,18 @@ class CodeKnowledgeCoreAdapter(ABC):
         """List persisted graph snapshots available for reuse."""
         ...
 
+    def load_graph_snapshot(
+        self,
+        *,
+        repo_id: str,
+        graph_id: str,
+    ) -> GraphSnapshot | None:
+        """Load a persisted graph snapshot by repo and graph id."""
+        raise QueryError(
+            "Graph snapshot loading is not supported by this Code Knowledge Core backend.",
+            recoverable=True,
+        )
+
     @abstractmethod
     def delete_graph(self, *, repo_id: str, graph_id: str) -> bool:
         """Delete a persisted graph snapshot."""
@@ -233,6 +245,28 @@ class GitNexusCliCodeKnowledgeCoreAdapter(CodeKnowledgeCoreAdapter):
                 recoverable=True,
                 diagnostics=exc.diagnostics,
             ) from exc
+
+    def load_graph_snapshot(
+        self,
+        *,
+        repo_id: str,
+        graph_id: str,
+    ) -> GraphSnapshot | None:
+        try:
+            payload = self._graph_store.load_payload(
+                repo_id=repo_id,
+                graph_id=graph_id,
+            )
+        except GraphStoreError as exc:
+            raise QueryError(
+                exc.message,
+                recoverable=True,
+                diagnostics=exc.diagnostics,
+            ) from exc
+        if payload is None:
+            return None
+        self._local_indexes[(repo_id, graph_id)] = LocalGraphIndex.from_payload(payload)
+        return map_index_payload(payload, now=self._now)
 
     def _should_restore_persisted_payload(
         self,
